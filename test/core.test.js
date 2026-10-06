@@ -54,6 +54,23 @@ const tcgHandler = (req, res) => {
   if (q.includes('number:"7" set.printedTotal:99')) return json(res, 200, { data: [card('Machin', '7', 'Set A', 99, { trendPrice: 80 }), card('Truc', '7', 'Set B', 99, { trendPrice: 30 })] });
   json(res, 200, { data: [] });
 };
+const tcgdexCalls = [];
+let tcgdexDown = false;
+const dexCard = (id, localId, name, trend, extra = {}) => ({ id, localId, name, image: 'http://img/' + id, pricing: { cardmarket: { trend, avg7: trend, avg30: trend, ...extra } } });
+const tcgdexHandler = (req, res) => {
+  tcgdexCalls.push(req.url);
+  if (tcgdexDown) { res.writeHead(500); return res.end('{}'); }
+  const u = req.url;
+  if (u === '/v2/fr/sets') return json(res, 200, [{ id: 'base1', name: 'Set de Base', cardCount: { total: 102, official: 102 } }, { id: 'setA', name: 'Set A', cardCount: { total: 99, official: 99 } }, { id: 'setB', name: 'Set B', cardCount: { total: 99, official: 99 } }]);
+  if (u === '/v2/fr/sets/base1') return json(res, 200, { id: 'base1', cards: [{ id: 'base1-4', localId: '4', name: 'Dracaufeu' }, { id: 'base1-58', localId: '58', name: 'Pikachu' }] });
+  if (u === '/v2/fr/sets/setA') return json(res, 200, { id: 'setA', cards: [{ id: 'setA-7', localId: '7', name: 'Machin' }] });
+  if (u === '/v2/fr/sets/setB') return json(res, 200, { id: 'setB', cards: [{ id: 'setB-7', localId: '007', name: 'Truc-EX' }] });
+  if (u === '/v2/fr/cards/base1-4') return json(res, 200, dexCard('base1-4', '4', 'Dracaufeu', 80));
+  if (u === '/v2/fr/cards/base1-58') return json(res, 200, dexCard('base1-58', '58', 'Pikachu', 3));
+  if (u === '/v2/fr/cards/setA-7') return json(res, 200, dexCard('setA-7', '7', 'Machin', 80, { 'trend-holo': 120 }));
+  if (u === '/v2/fr/cards/setB-7') return json(res, 200, dexCard('setB-7', '007', 'Truc-EX', 30));
+  res.writeHead(404); res.end('{}');
+};
 const telegramHandler = async (req, res) => { telegramSent.push(JSON.parse(await readBody(req)).text); json(res, 200, { ok: true }); };
 
 /* ---------- Faux Capacitor (forme de réponse lue dans le code source de CapacitorHttp) ---------- */
@@ -91,9 +108,9 @@ const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
 (async () => {
-  const [vinted, claude, tcg, tg] = await Promise.all([listen(vintedHandler), listen(claudeHandler), listen(tcgHandler), listen(telegramHandler)]);
+  const [vinted, claude, tcg, tg, dex] = await Promise.all([listen(vintedHandler), listen(claudeHandler), listen(tcgHandler), listen(telegramHandler), listen(tcgdexHandler)]);
   const mk = (extra = {}, rt = globalThis) =>
-    createCore({ request: makeRequest(rt), storage: memStorage(), vintedBase: vinted.url, anthropicBase: claude.url, tcgBase: tcg.url, tgBase: tg.url, minWatch: 1, ...extra });
+    createCore({ request: makeRequest(rt), storage: memStorage(), vintedBase: vinted.url, anthropicBase: claude.url, tcgBase: tcg.url, tgBase: tg.url, tcgdexBase: dex.url, minWatch: 1, ...extra });
 
   test('parseSetCookie : tableau, chaîne jointe, virgule dans Expires', () => {
     assert.equal(parseSetCookie(['a=1; Path=/', 'b=2; HttpOnly']), 'a=1; b=2');
@@ -137,7 +154,7 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(byId[1].deal.margin, 44);
     assert.equal(byId[1].deal.score, 90);
     assert.equal(byId[1].deal.level, 'top');
-    assert.equal(byId[1].analysis.name, 'Charizard');
+    assert.equal(byId[1].analysis.name, 'Dracaufeu');
     assert.equal(byId[2].deal, null);
     assert.deepEqual(byId[2].lot, { count: 200, perCard: 0.04 });
     assert.equal(byId[3].deal.level, 'none'); // Pikachu à 3 € : marge négative
@@ -145,24 +162,57 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(claudeCalls.length, claudeBefore, "aucun appel à l'API Claude pour scorer");
   });
 
-  test('Formule : borne à 100, carte ambiguë plafonnée à « bien », cache des prix', async () => {
+  test('Reconnaissance : le nom français du titre tranche entre extensions de même numéro/total', async () => {
     const saved = vintedItems.slice();
     vintedItems.length = 0;
-    vintedItems.push({ id: 7, title: 'Carte 7/99', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } });
-    vintedItems.push({ id: 8, title: 'Carte 7/99 reverse', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } });
-    vintedItems.push({ id: 9, title: 'Carte 58/102 neuve', price: { amount: '0.5' }, photo: { url: 'x' }, user: { login: 'c' } });
-    tcgQueries.length = 0;
+    vintedItems.push({ id: 7, title: 'Truc ex 7/99 neuve', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } }); // Set B (nom EX dans le titre)
+    vintedItems.push({ id: 8, title: 'Machin 007/99 reverse', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } }); // Set A, reverse holo
+    vintedItems.push({ id: 9, title: 'Carte pokemon 7/99', price: { amount: '0.5' }, photo: { url: 'x' }, user: { login: 'c' } }); // pas de nom, 2 extensions : non identifiée
+    vintedItems.push({ id: 10, title: 'Carte neuve 4/102', price: { amount: '5.0' }, photo: { url: 'x' }, user: { login: 'd' } }); // pas de nom mais 1 seule extension
+    vintedItems.push({ id: 11, title: 'Mewtwo 4/102', price: { amount: '5.0' }, photo: { url: 'x' }, user: { login: 'e' } }); // mauvais nom : le nom connu est Dracaufeu
     const core = mk();
     const j = await core.api('/api/recent?q=x');
     vintedItems.length = 0;
     vintedItems.push(...saved);
     const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
-    assert.equal(byId[7].deal.ambiguous, true);
-    assert.equal(byId[7].deal.market, 30); // la moins chère des deux cartes possibles
+    assert.equal(byId[7].deal.matched.startsWith('Truc-EX — Set B'), true);
+    assert.equal(byId[7].deal.market, 30);
     assert.equal(byId[7].deal.score, 100);
-    assert.equal(byId[7].deal.level, 'good', 'ambiguë : jamais « top »');
-    assert.equal(tcgQueries.filter((q) => q.includes('"7"')).length >= 1, true);
-    assert.ok(tcgQueries.filter((q) => q.includes('number:"7" set.printedTotal:99')).length <= 2, 'une seule requête par numéro (cache), reverse = autre clé');
+    assert.equal(byId[7].deal.level, 'top');
+    assert.equal(byId[8].deal.market, 120, 'reverse : prix holo');
+    assert.equal(byId[9].deal, null, 'ambiguë sans nom : pas de score plutôt qu\'un faux');
+    assert.equal(byId[10].deal.unverified, true);
+    assert.equal(byId[10].deal.level, 'good', 'nom absent du titre : jamais « top »');
+    assert.equal(byId[10].deal.gap, Math.round((5 / 80 - 1) * 100));
+    assert.equal(byId[11].deal.unverified, true, 'une seule extension possible : acceptée mais signalée');
+  });
+
+  test('Repli pokemontcg.io si TCGdex est en panne : seulement si le numéro est sans ambiguïté', async () => {
+    const saved = vintedItems.slice();
+    vintedItems.length = 0;
+    vintedItems.push({ id: 21, title: 'Pikachu 58/102', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } });
+    vintedItems.push({ id: 22, title: 'Truc 7/99', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } });
+    tcgdexDown = true;
+    try {
+      const j = await mk().api('/api/recent?q=x');
+      const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(byId[21].deal.market, 3);
+      assert.equal(byId[21].deal.unverified, true);
+      assert.equal(byId[22].deal, null, 'deux cartes possibles : rien');
+    } finally {
+      tcgdexDown = false;
+      vintedItems.length = 0;
+      vintedItems.push(...saved);
+    }
+  });
+
+  test('Cache : une extension / carte n\'est demandée qu\'une fois', async () => {
+    tcgdexCalls.length = 0;
+    const core = mk();
+    await core.api('/api/recent?q=a');
+    const n = tcgdexCalls.length;
+    await core.api('/api/recent?q=b');
+    assert.equal(tcgdexCalls.length, n, 'deuxième rafraîchissement : aucun nouvel appel TCGdex');
   });
 
   test('Chemin natif Android : cookies en chaîne jointe, jeton lu depuis set-cookie', async () => {
@@ -298,7 +348,7 @@ const test = (name, fn) => tests.push({ name, fn });
       console.log('✘', t.name, '\n   ', e && e.message ? e.message : e);
     }
   }
-  for (const x of [vinted, claude, tcg, tg]) x.s.close();
+  for (const x of [vinted, claude, tcg, tg, dex]) x.s.close();
   console.log(failed ? `\n${failed} test(s) en échec` : `\n${tests.length} tests OK`);
   process.exit(failed ? 1 : 0);
 })();

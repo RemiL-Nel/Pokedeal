@@ -44,9 +44,11 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 - **Alertes en arrière-plan** : la surveillance tourne tant que l'appli est ouverte ou vient d'être mise de côté. Android suspend ensuite les applis inactives, donc ne compte pas dessus toute la nuit. Une surveillance fiable 24 h/24 demande un service dédié (ou le serveur de la v2 sur un PC allumé) ; je peux l'étudier.
 - **Non testé sur un vrai téléphone** : la logique est testée (tests automatiques, interface simulée, réponses au format Capacitor lues dans son code source), mais pas l'APK lui-même. Les points à surveiller au premier lancement : la liste Vinted se remplit, la caméra s'ouvre, une notification test arrive (Stock › Alertes › Notification test), le partage de la photo vers Vinted.
 - **Vinted** : pas d'API publique, le scraping est contraire à leurs CGU et peut être bloqué ou casser. Le paiement reste chez Vinted : « Acheter ↗ » ouvre l'annonce, tu valides toi-même.
-- **Score de bonne affaire** : calculé par formule, sans IA. L'appli lit le numéro de carte dans le titre (ex. `025/165`), cherche le prix Cardmarket correspondant (pokemontcg.io) puis calcule :
+- **Score de bonne affaire** : calculé par formule, sans IA. Reconnaissance : l'appli lit le numéro dans le titre (ex. `025/165`), cherche les extensions qui ont ce total (TCGdex, noms français), et **le nom de la carte doit apparaître dans le titre** pour valider (« Dracaufeu » pour 4/102). Sans nom dans le titre, la carte n'est acceptée que si une seule extension est possible (signalé « nom absent du titre ») ; sinon pas de score plutôt qu'un faux. Repli sur pokemontcg.io si TCGdex ne répond pas.
+  Prix : Cardmarket (tendance) de la carte reconnue. Calcul :
   `coût = prix payé (frais Vinted inclus) + port d'achat` · `revente = prix Cardmarket × 0,9 (décote prudente) × (1 − commission)` · `marge = revente − coût` · `score = marge / coût × 50`, borné à 0-100 (🔥 : score ≥ 50 et marge ≥ 5 € ; 👍 : score ≥ 25 et marge ≥ 2 €).
-  Limites : il faut un numéro `n/total` dans le titre (sinon pas de score) ; lots, cartes gradées et japonaises ne sont pas scorés ; si plusieurs cartes ont le même numéro/total, on prend la moins chère (« plusieurs cartes possibles ») ; le prix est celui de la version anglaise et l'état réel compte. Regarde toujours les photos avant d'acheter.
+  Un score de 0 veut dire « pas de marge » : c'est le cas de la plupart des annonces, vendues au prix du marché. L'écart affiché (« prix +12 % vs marché ») dit à quel point.
+  Limites : il faut un numéro `n/total` dans le titre ; lots, cartes gradées et japonaises ne sont pas scorés ; le prix est celui de Cardmarket toutes langues et l'état réel compte. Regarde toujours les photos avant d'acheter.
 - **API Vinted** : depuis septembre 2026, Vinted a remplacé `/api/v2/catalog/items` par `api.vinted.fr/svc-catalogue/items` avec un jeton anonyme. L'appli utilise le nouvel endpoint ; s'il change encore, la liste affichera l'erreur reçue.
 - **Sauvegarde** : stock et budget sont stockés sur le téléphone. Utilise Stock › Réglages › Exporter avant de désinstaller. Les clés API ne sont pas incluses dans l'export. La sauvegarde cloud Android est désactivée pour que les clés ne partent pas chez Google.
 - L'icône est celle par défaut de Capacitor.
@@ -55,7 +57,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ```bash
 npm ci
-npm test        # 16 tests de la logique embarquée (www/js/core.js)
+npm test        # 18 tests de la logique embarquée (www/js/core.js)
 ```
 
 Le projet Android n'est pas dans le dépôt : il est généré à chaque build par `npx cap add android`, puis ajusté par `scripts/patch-android.js` (permission caméra, pas de sauvegarde cloud).

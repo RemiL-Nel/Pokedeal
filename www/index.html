@@ -336,9 +336,9 @@ function itemEl(it){
   meta.appendChild(tag('div', 'ttl', it.title));
   if (d && d.level !== 'none') {
     meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
-    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.ambiguous ? 'plusieurs cartes possibles, ' : '') + 'estimation, vérifie la carte (langue, état)'));
+    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.unverified ? 'nom absent du titre, vérifie la carte · ' : '') + 'estimation, vérifie langue et état'));
   } else if (d) {
-    meta.appendChild(tag('div', 'sm', 'Score ' + d.score + '/100 · Cardmarket ~' + fmt(d.market) + ' · marge ' + sgn(d.margin)));
+    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + 'Cardmarket ~' + fmt(d.market) + ' · prix ' + (d.gap > 0 ? '+' : '') + d.gap + ' % vs marché · marge ' + sgn(d.margin) + ' · score ' + d.score + '/100'));
   } else if (it.lot) {
     meta.appendChild(tag('div', 'sm', 'Lot de ' + it.lot.count + ' cartes · ' + fmt(it.lot.perCard) + ' / carte'));
   } else if (it.graded) {

@@ -207,52 +207,127 @@
       return [...seen.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
     }
 
-    /* ---------- Prix Cardmarket via pokemontcg.io (identification par numéro/total) ---------- */
-    const priceCache = new Map();
+    /* ---------- Reconnaissance de la carte + prix Cardmarket ---------- */
+    // Méthode : numéro/total du titre → extension(s) possible(s) → le NOM de la carte (en français)
+    // doit apparaître dans le titre. Sans cette vérification, 4/102 pourrait être n'importe quelle extension.
+    // Source : TCGdex (noms français, prix Cardmarket). Repli : pokemontcg.io, seulement si le numéro est sans ambiguïté.
+    const TCGDEX = env.tcgdexBase || 'https://api.tcgdex.net';
+    const DAY = 24 * 3600 * 1000;
+    const memo = new Map(); // url -> { at, v }
 
-    // Renvoie : un objet prix, null (carte introuvable) ou undefined (erreur réseau, à réessayer).
-    async function lookupPrice(card) {
+    async function getJson(url, ttl, headers = { accept: 'application/json' }) {
+      const hit = memo.get(url);
+      if (hit && Date.now() - hit.at < ttl) return hit.v;
+      const r = await request(url, { headers, timeout: 15000 });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const v = await r.json();
+      memo.set(url, { at: Date.now(), v });
+      if (memo.size > 2000) [...memo.keys()].slice(0, 500).forEach((k) => memo.delete(k));
+      return v;
+    }
+
+    const plain = (x) =>
+      String(x || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[-–’'.]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const NAME_STOP = new Set(['ex', 'gx', 'v', 'vmax', 'vstar', 'vunion', 'break', 'prime', 'lv', 'x', 'star', 'delta']);
+    // Mot-clé du nom de la carte (« Dracaufeu-EX » → « dracaufeu »)
+    function nameKey(name) {
+      const words = plain(name).split(' ').filter((w) => w && !NAME_STOP.has(w));
+      return words.find((w) => w.length >= 3) || words.join(' ');
+    }
+    const sameNumber = (local, n) => {
+      const a = String(local || '').toLowerCase();
+      return a === String(n) || String(parseInt(a, 10)) === String(n);
+    };
+
+    const cmUrlFor = (name, set) => `https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(`${name} ${set || ''}`.trim())}`;
+
+    function tcgdexPrice(card, reverse) {
+      const cm = card && card.pricing && card.pricing.cardmarket;
+      if (!cm) return 0;
+      const pick = reverse ? [cm['trend-holo'], cm['avg7-holo'], cm.trend, cm.avg7, cm.avg] : [cm.trend, cm.avg7, cm.avg30, cm.avg];
+      const v = pick.map(Number).find((x) => x > 0);
+      return v || 0;
+    }
+
+    // Renvoie : objet carte+prix, null (carte non identifiée de façon sûre) ou undefined (erreur réseau/format, à réessayer).
+    async function resolveTcgdex(a, title) {
+      const sets = await getJson(`${TCGDEX}/v2/fr/sets`, DAY);
+      if (!Array.isArray(sets)) return undefined;
+      const count = (x) => x.cardCount || {};
+      let cands = sets.filter((x) => count(x).official === a.total);
+      if (!cands.length) cands = sets.filter((x) => count(x).total === a.total);
+      cands = cands.slice(0, 8);
+      if (!cands.length) return null;
+      const t = plain(title);
+      const found = [];
+      for (const st of cands) {
+        const det = await getJson(`${TCGDEX}/v2/fr/sets/${encodeURIComponent(st.id)}`, DAY);
+        const c = det && Array.isArray(det.cards) ? det.cards.find((x) => sameNumber(x.localId, a.number)) : null;
+        if (c) found.push({ set: st, card: c, named: !!(c.name && t.includes(nameKey(c.name))) });
+      }
+      let pick = found.filter((f) => f.named);
+      let nameChecked = true;
+      if (!pick.length) {
+        // le titre ne contient pas le nom : on n'accepte que si une seule extension est possible
+        if (found.length !== 1) return null;
+        pick = found;
+        nameChecked = false;
+      }
+      if (pick.length > 1) return null; // deux cartes de même nom pour ce numéro/total : trop incertain
+      const { set, card } = pick[0];
+      const full = await getJson(`${TCGDEX}/v2/fr/cards/${encodeURIComponent(card.id)}`, 6 * 3600 * 1000);
+      if (!full) return null;
+      const trend = tcgdexPrice(full, a.reverse);
+      return {
+        matched: `${full.name || card.name} — ${set.name} ${full.localId || card.localId}/${count(set).official || a.total}`,
+        name: full.name || card.name,
+        set: set.name,
+        image: full.image ? full.image + '/low.webp' : '',
+        trend: trend || null,
+        url: cmUrlFor(full.name || card.name, set.name),
+        nameChecked,
+      };
+    }
+
+    async function resolveTcgIo(a) {
+      const q = `number:"${a.number}" set.printedTotal:${a.total}`;
+      const headers = { accept: 'application/json' };
+      if (settings.tcgKey) headers['x-api-key'] = settings.tcgKey;
+      const r = await request(`${TCG_BASE}/v2/cards?pageSize=12&q=` + encodeURIComponent(q), { headers, timeout: 15000 });
+      if (!r.ok) return r.status === 404 ? null : undefined;
+      const list = ((await r.json()).data || []).filter((c) => c.cardmarket && c.cardmarket.prices);
+      if (list.length !== 1) return null; // plusieurs cartes possibles et pas de nom français pour trancher : on n'invente rien
+      const c = list[0];
+      const p = c.cardmarket.prices;
+      const trend = Number(a.reverse ? p.reverseHoloTrend || p.trendPrice : p.trendPrice || p.avg30);
+      return {
+        matched: `${c.name} — ${c.set.name} ${c.number}/${c.set.printedTotal}`,
+        name: c.name,
+        set: c.set.name,
+        image: c.images && c.images.small,
+        trend: trend > 0 ? trend : null,
+        url: c.cardmarket.url,
+        nameChecked: false,
+      };
+    }
+
+    async function resolveCard(a, title) {
       try {
-        const q = `number:"${card.number}" set.printedTotal:${card.total}`;
-        const headers = { accept: 'application/json' };
-        if (settings.tcgKey) headers['x-api-key'] = settings.tcgKey;
-        const r = await request(`${TCG_BASE}/v2/cards?pageSize=12&q=` + encodeURIComponent(q), { headers, timeout: 15000 });
-        if (!r.ok) return r.status === 404 ? null : undefined;
-        const list = ((await r.json()).data || []).filter((c) => c.cardmarket && c.cardmarket.prices);
-        if (!list.length) return null;
-        const priced = list
-          .map((c) => {
-            const p = c.cardmarket.prices;
-            const trend = card.reverse ? p.reverseHoloTrend || p.trendPrice : p.trendPrice || p.avg30;
-            return { c, trend: Number(trend) };
-          })
-          .filter((x) => x.trend > 0)
-          .sort((x, y) => x.trend - y.trend);
-        if (!priced.length) return null;
-        // plusieurs cartes possibles (même numéro/total dans des extensions différentes) : on prend la moins chère, prudence
-        const hit = priced[0];
-        return {
-          matched: `${hit.c.name} — ${hit.c.set.name} ${hit.c.number}/${hit.c.set.printedTotal}`,
-          name: hit.c.name,
-          set: hit.c.set.name,
-          image: hit.c.images && hit.c.images.small,
-          trend: hit.trend,
-          low: hit.c.cardmarket.prices.lowPrice,
-          url: hit.c.cardmarket.url,
-          ambiguous: priced.length > 1 && priced[priced.length - 1].trend > hit.trend * 1.5,
-        };
+        const v = await resolveTcgdex(a, title);
+        if (v !== undefined) return v;
+      } catch {}
+      try {
+        return await resolveTcgIo(a);
       } catch {
         return undefined;
       }
-    }
-
-    async function lookupPriceCached(card) {
-      const key = `${card.number}/${card.total}|${card.reverse ? 'r' : 'n'}`;
-      const hit = priceCache.get(key);
-      if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.v;
-      const v = await lookupPrice(card);
-      if (v !== undefined) priceCache.set(key, { at: Date.now(), v });
-      return v;
     }
 
     async function pool(list, n, fn) {
@@ -320,11 +395,11 @@
     async function analyzeItems(items) {
       for (const it of items) if (!analysisCache.has(it.id)) analysisCache.set(it.id, { ...parseTitle(it.title), tries: 0 });
       const todo = items
-        .map((i) => analysisCache.get(i.id))
-        .filter((a) => a.single && a.market === undefined && a.tries < 3)
+        .map((i) => ({ a: analysisCache.get(i.id), title: i.title }))
+        .filter((x) => x.a.single && x.a.market === undefined && x.a.tries < 3)
         .slice(0, MAX_LOOKUPS);
-      await pool(todo, 4, async (a) => {
-        const v = await lookupPriceCached(a);
+      await pool(todo, 4, async ({ a, title }) => {
+        const v = await resolveCard(a, title);
         if (v === undefined) a.tries++;
         else a.market = v;
       });
@@ -340,7 +415,8 @@
      *   marge      = revente − coût
      *   ROI        = marge / coût
      *   score /100 = ROI × 50, borné à [0 ; 100]   (ROI +200 % = 100)
-     *   🔥 top : score ≥ 50 et marge ≥ 5 €  ·  👍 bien : score ≥ 25 et marge ≥ 2 €  (plafonné à « bien » si carte ambiguë) */
+     *   🔥 top : score ≥ 50 et marge ≥ 5 €  ·  👍 bien : score ≥ 25 et marge ≥ 2 €  (plafonné à « bien » si le nom n'est pas dans le titre)
+     *   écart = prix payé / prix marché − 1 (info : un score de 0 veut dire « pas de marge », l'écart dit à quel point) */
     const HAIRCUT = 0.9;
     function dealFor(item, a) {
       if (!a || !a.single || !a.market || item.price == null) return null;
@@ -352,8 +428,11 @@
       const roi = margin / cost;
       const score = Math.max(0, Math.min(100, Math.round(roi * 50)));
       let level = score >= 50 && margin >= 5 ? 'top' : score >= 25 && margin >= 2 ? 'good' : 'none';
-      if (a.market.ambiguous && level === 'top') level = 'good';
-      return { market: r2(mkt), cost: r2(cost), margin: r2(margin), roi: r2(roi), score, level, ambiguous: !!a.market.ambiguous, matched: a.market.matched, cmUrl: a.market.url };
+      const unverified = a.market.nameChecked === false; // nom de la carte absent du titre : identification moins sûre
+      if (unverified && level === 'top') level = 'good';
+      const paid = item.totalPrice != null ? item.totalPrice : item.price;
+      const gap = Math.round((paid / mkt - 1) * 100); // écart du prix payé vs prix du marché, en %
+      return { market: r2(mkt), cost: r2(cost), margin: r2(margin), roi: r2(roi), score, gap, level, unverified, matched: a.market.matched, cmUrl: a.market.url, image: a.market.image || '' };
     }
 
     function decorate(it) {
@@ -638,7 +717,7 @@
       if (p === '/api/identify' && method === 'POST') {
         const card = await identifyCard(body && body.image);
         const nm = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(card.number || '');
-        const market = nm ? await lookupPriceCached({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }) : null;
+        const market = nm ? await resolveCard({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }, `${card.name_fr || ''} ${card.name || ''}`) : null;
         return { card, market, listing: buildListing(card, market ? market.trend : null) };
       }
       if (p === '/api/budget' && method === 'POST') {
