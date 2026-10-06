@@ -883,8 +883,12 @@
     let primed = false; // 1er passage silencieux : on mémorise l'existant sans notifier
     const watchStatus = { running: false, lastRun: null, lastError: null, sent: 0 };
 
+    let inflight = false;
+    let lastStart = 0;
     async function watchTick(myGen) {
       const w = state.watch;
+      inflight = true;
+      lastStart = Date.now();
       try {
         const items = await searchMany(w.queries, { max: w.maxPrice });
         await analyzeItems(items);
@@ -919,10 +923,20 @@
       } catch (e) {
         watchStatus.lastError = e.message;
       } finally {
+        inflight = false;
         if (myGen === gen && state.watch.enabled) {
           watchTimer = setTimeout(() => watchTick(myGen), Math.max(MIN_WATCH, state.watch.intervalSec || 60) * 1000);
         }
       }
+    }
+
+    /* Appelé par le service natif (battement régulier) : relance un passage si le minuteur JS a été gelé par Android */
+    function poke() {
+      if (!state.watch.enabled || inflight) return false;
+      if (Date.now() - lastStart < Math.max(MIN_WATCH, state.watch.intervalSec || 60) * 1000 - 2000) return false;
+      clearTimeout(watchTimer);
+      watchTick(gen);
+      return true;
     }
 
     function restartWatch() {
@@ -1085,7 +1099,7 @@
 
     if (state.watch.enabled) restartWatch();
 
-    return { api, parseTitle, parseCardText };
+    return { api, parseTitle, parseCardText, poke };
   }
 
   const api = { createCore, makeRequest, parseSetCookie };

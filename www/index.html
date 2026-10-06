@@ -323,6 +323,7 @@ const core = PDCore.createCore({
   ensureNotifyPermission,
 });
 const api = (path, method = 'GET', body) => core.api(path, method, body);
+window.pdPoke = () => core.poke();
 
 let toastT;
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 2200); }

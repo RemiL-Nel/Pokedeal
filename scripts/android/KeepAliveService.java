@@ -10,12 +10,25 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
+import android.webkit.WebView;
 
 /** Service de premier plan : garde le processus (et donc la surveillance JS) vivant écran éteint. */
 public class KeepAliveService extends Service {
     private static final String CH = "pd_keepalive";
     private PowerManager.WakeLock wl;
+    /** WebView de l'appli (posé par MainActivity) */
+    public static volatile WebView web;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private final Runnable beat = new Runnable() {
+        @Override public void run() {
+            try { WebView w = web; if (w != null) { w.resumeTimers(); w.evaluateJavascript("window.pdPoke&&window.pdPoke()", null); } } catch (Exception ignored) {}
+            h.postDelayed(this, 20000);
+        }
+    };
+    private boolean beating = false;
 
     @Override public IBinder onBind(Intent i) { return null; }
 
@@ -40,10 +53,12 @@ public class KeepAliveService extends Service {
             wl.setReferenceCounted(false);
             wl.acquire();
         }
+        if (!beating) { beating = true; h.postDelayed(beat, 20000); }
         return START_STICKY;
     }
 
     @Override public void onDestroy() {
+        h.removeCallbacks(beat); beating = false;
         if (wl != null && wl.isHeld()) wl.release();
         wl = null;
         super.onDestroy();

@@ -9,6 +9,12 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(KeepAlivePlugin.class);
         super.onCreate(savedInstanceState);
+        try {
+            WebView w = getBridge().getWebView();
+            KeepAliveService.web = w;
+            // garde le processus de rendu du WebView prioritaire même écran éteint / appli masquée
+            if (android.os.Build.VERSION.SDK_INT >= 26) w.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        } catch (Exception ignored) {}
     }
 
     // Garde les timers JS actifs quand l'appli passe en arrière-plan (la surveillance en dépend)
