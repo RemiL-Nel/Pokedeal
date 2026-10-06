@@ -267,7 +267,7 @@ const test = (name, fn) => tests.push({ name, fn });
       const by = Object.fromEntries(j.items.map((i) => [i.id, i]));
       assert.match(by[61].scoreReason, /lot de 50 cartes/);
       assert.match(by[62].scoreReason, /gradée/);
-      assert.match(by[63].scoreReason, /pas de numéro/);
+      assert.match(by[63].scoreReason, /carte non reconnue/);
       assert.match(by[64].scoreReason, /non identifiée/);
       assert.equal(by[65].scoreReason, '');
       assert.ok(by[65].deal);
@@ -298,6 +298,48 @@ const test = (name, fn) => tests.push({ name, fn });
       assert.match(d.matched, /Pokémon 30 ans 038\/128/);
       assert.equal(d.unverified, true);
       assert.equal(j.items[0].refKey, '38/128');
+    });
+  });
+
+  test('Reconnaissance par la photo : titre sans nom, titre sans numéro, photo illisible', async () => {
+    await withItems([
+      [81, 'Carte neuve 4/102', 'http://x/fr/81.jpg'],        // numéro mais pas de nom : le nom imprimé sur la carte valide
+      [82, 'Carte holo rare neuve', 'http://x/fr/82.jpg'],    // pas de numéro : lu sur la carte
+      [83, 'Carte neuve 4/102', 'http://x/blur/83.jpg'],      // photo illisible : rien
+    ], async () => {
+      const ocr = async (url) => (url.includes('/fr/') ? FR_TEXT : 'flou');
+      // sans OCR : aucune des trois n'est identifiée
+      let j = await (async () => { const c = mk(); await c.api('/api/settings', 'POST', { frMode: 'off' }); return c.api('/api/recent?q=x'); })();
+      assert.ok(j.items.every((i) => !i.deal));
+      const core = mk({ ocr });
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      j = await settle(core);
+      const by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(by[81].deal.market, 80);
+      assert.equal(by[81].deal.via, 'photo');
+      assert.equal(by[82].deal.market, 80);
+      assert.equal(by[82].refKey, '4/102');
+      assert.equal(by[83].deal, null);
+      assert.match(by[83].scoreReason, /non identifiée|non reconnue/);
+    });
+  });
+
+  test('Reconnaissance nom + extension (titre sans numéro) et vérification par mot entier', async () => {
+    await withItems([
+      [91, 'Spectrum fossile neuf'],     // extension « Fossile » + nom unique dans cette extension
+      [92, 'Spectrum holo'],             // pas d'extension : rien
+      [93, 'Machinette 7/99'],           // « Machinette » n'est pas « Machin »
+      [94, 'Machin 7/99'],               // mot entier : accepté
+    ], async () => {
+      const core = mk();
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      const by = Object.fromEntries((await core.api('/api/recent?q=x')).items.map((i) => [i.id, i]));
+      assert.equal(by[91].deal.market, 36.35);
+      assert.equal(by[91].deal.via, 'extension');
+      assert.equal(by[91].refKey, '21/62');
+      assert.equal(by[92].deal, null);
+      assert.equal(by[93].deal, null);
+      assert.equal(by[94].deal.market, 80);
     });
   });
 

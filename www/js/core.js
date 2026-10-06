@@ -242,6 +242,11 @@
       const words = plain(name).split(' ').filter((w) => w && !NAME_STOP.has(w));
       return words.find((w) => w.length >= 3) || words.join(' ');
     }
+    // Le nom est-il un MOT du texte (« Mew » ne doit pas valider « Mewtwo ») ? pluriel simple toléré.
+    function hasWord(textPlain, key) {
+      if (!key) return false;
+      return textPlain.split(' ').some((w) => w === key || w === key + 's' || w === key + 'x');
+    }
     const sameNumber = (local, n) => {
       const a = String(local || '').toLowerCase();
       return a === String(n) || String(parseInt(a, 10)) === String(n);
@@ -280,7 +285,7 @@
       for (const st of cands) {
         const det = await getJson(`${TCGDEX}/v2/fr/sets/${encodeURIComponent(st.id)}`, DAY);
         const c = det && Array.isArray(det.cards) ? det.cards.find((x) => sameNumber(x.localId, a.number)) : null;
-        if (c) found.push({ set: st, card: c, named: !!(c.name && t.includes(nameKey(c.name))) });
+        if (c) found.push({ set: st, card: c, named: !!(c.name && hasWord(t, nameKey(c.name))) });
       }
       let pick = found.filter((f) => f.named);
       let nameChecked = true;
@@ -291,19 +296,42 @@
         nameChecked = false;
       }
       if (pick.length > 1) return null; // deux cartes de même nom pour ce numéro/total : trop incertain
-      const { set, card } = pick[0];
+      return finishTcgdex(pick[0].set, pick[0].card, a, nameChecked);
+    }
+
+    async function finishTcgdex(set, card, a, nameChecked) {
       const full = await getJson(`${TCGDEX}/v2/fr/cards/${encodeURIComponent(card.id)}`, 6 * 3600 * 1000);
       if (!full) return null;
       const trend = tcgdexPrice(full, a.reverse);
+      const total = (set.cardCount || {}).official || a.total;
       return {
-        matched: `${full.name || card.name} — ${set.name} ${full.localId || card.localId}/${count(set).official || a.total}`,
+        matched: `${full.name || card.name} — ${set.name} ${full.localId || card.localId}/${total}`,
         name: full.name || card.name,
         set: set.name,
         image: full.image ? full.image + '/low.webp' : '',
         trend: trend || null,
         url: cmUrlFor(full.name || card.name, set.name),
         nameChecked,
+        number: String(full.localId || card.localId).replace(/^0+(?=\d)/, ''),
+        total,
       };
+    }
+
+    // Méthode « nom + extension » : titre sans numéro mais qui cite l'extension ET un nom de carte présent une seule fois dans cette extension.
+    async function resolveByNameSet(a, title) {
+      const sets = await getJson(`${TCGDEX}/v2/fr/sets`, DAY);
+      if (!Array.isArray(sets)) return undefined;
+      const t = plain(title);
+      const cands = sets.filter((x) => x.name && setEvidence(x.name, t));
+      if (!cands.length || cands.length > 3) return null;
+      const hits = [];
+      for (const st of cands) {
+        const det = await getJson(`${TCGDEX}/v2/fr/sets/${encodeURIComponent(st.id)}`, DAY);
+        for (const c of det && Array.isArray(det.cards) ? det.cards : []) if (c.name && hasWord(t, nameKey(c.name))) hits.push({ set: st, card: c });
+      }
+      if (hits.length !== 1) return null; // aucune carte, ou plusieurs impressions du même nom : trop incertain
+      const m = await finishTcgdex(hits[0].set, hits[0].card, a, true);
+      return m && m.total ? m : null;
     }
 
     async function resolveTcgIo(a, title, lenient) {
@@ -464,36 +492,47 @@
       return { lang: 'unknown', src: '' };
     }
     // La photo d'un lot ne dit rien de la langue ; l'IA (payante) n'est consultée que pour les cartes identifiées
-    // L'OCR lit toutes les photos de cartes (langue + numéro imprimé, pour recouper le titre) ; l'IA n'est consultée que si langue inconnue
+    // L'OCR lit toutes les photos de cartes (langue + nom + numéro imprimé : identifie ou recoupe le titre) ; l'IA n'est consultée que si langue inconnue
     const needsLangCheck = (it, a) => {
       if (!(a && !a.lot && it.photo)) return false;
       const e = langCache.get(it.id) || {};
       const unknown = langOf(it, a).lang === 'unknown';
-      return (ocrAvailable && !e.ocr && (unknown || a.single)) || (langCheckOn() && unknown && a.single && !e.ai && (e.tries || 0) < 2);
+      return (ocrAvailable && !e.ocr && !a.graded) || (langCheckOn() && unknown && a.single && !e.ai && (e.tries || 0) < 2);
     };
 
-    // Recoupe le numéro du titre avec ceux imprimés sur la carte (photo). Une carte peut porter plusieurs « n/total »
-    // (ex. 038/128 + badge 16/30) : on ne garde que les identifications où le nom est vérifié, et si plusieurs
-    // le sont, celle au plus grand total (numérotation de l'extension plutôt que d'un badge) en la signalant comme moins sûre.
-    async function reconcile(it, a, text) {
-      if (!a || !a.single || a.reconciled) return;
+    // Deuxième méthode de reconnaissance : la photo. L'OCR lit le nom et les numéros « n/total » imprimés sur la carte.
+    //  - titre sans numéro, ou numéro refusé faute de nom/extension : le nom imprimé sur la carte vérifie l'identification ;
+    //  - plusieurs numéros sur la carte (ex. 038/128 + badge 16/30) : on ne garde que les identifications dont le nom est vérifié,
+    //    et si plusieurs le sont, celle au plus grand total (numérotation de l'extension plutôt que d'un badge), signalée moins sûre.
+    async function refineWithPhoto(it, a, text) {
+      if (!a || a.lot || a.graded || a.foreign || a.reconciled) return;
       a.reconciled = true;
-      const mine = `${a.number}/${a.total}`;
-      const extra = parseCardText(text).pairs.filter((p) => `${p.number}/${p.total}` !== mine).slice(0, 3);
-      if (!extra.length) return;
-      const cands = [];
-      if (a.market) cands.push({ n: a.number, t: a.total, m: a.market });
-      for (const p of extra) {
-        const m = await resolveCard({ number: p.number, total: p.total, reverse: a.reverse }, `${it.title} ${text}`);
-        if (m) cands.push({ n: p.number, t: p.total, m });
+      const titlePair = a.single ? { number: a.number, total: a.total } : null;
+      const seenPairs = new Set();
+      const pairs = [];
+      for (const p of [...(titlePair ? [titlePair] : []), ...parseCardText(text).pairs]) {
+        const k = `${p.number}/${p.total}`;
+        if (!seenPairs.has(k)) {
+          seenPairs.add(k);
+          pairs.push(p);
+        }
       }
-      const ver = cands.filter((c) => c.m.nameChecked).sort((x, y) => y.t - x.t);
+      const cands = [];
+      for (const p of pairs.slice(0, 4)) {
+        const m = await resolveCard({ number: p.number, total: p.total, reverse: a.reverse }, `${it.title} ${text}`);
+        if (m) cands.push({ p, m });
+      }
+      const ver = cands.filter((c) => c.m.nameChecked).sort((x, y) => y.p.total - x.p.total);
       if (!ver.length) return;
       const best = ver[0];
-      a.number = best.n;
-      a.total = best.t;
+      const viaPhoto = !a.single || !a.market;
+      a.single = true;
+      a.number = best.p.number;
+      a.total = best.p.total;
       a.market = ver.length > 1 ? { ...best.m, multi: true } : best.m;
+      if (viaPhoto) a.via = 'photo';
     }
+
     // Filtre « cartes françaises » : strict = langue française confirmée ; loose = pas de langue étrangère confirmée ; off = tout.
     // Les lots (langue invérifiable) restent visibles sauf s'ils annoncent une autre langue.
     function frKeep(it, a) {
@@ -514,7 +553,7 @@
           const text = await env.ocr(it.photo, { deep: langOf(it, a0).lang === 'unknown' });
           entry.ocrText = String(text || '').slice(0, 3000);
           const r = parseCardText(text);
-          await reconcile(it, a0, text);
+          await refineWithPhoto(it, a0, text);
           if (r.strong) {
             entry.v = r.lang === 'fr' ? 'fr' : 'other';
             entry.src = 'ocr';
@@ -569,10 +608,33 @@
         if (v === undefined) a.tries++;
         else a.market = v;
       });
+      // titre sans numéro : essai « nom + extension » cités dans le titre
+      const noNum = items
+        .map((i) => ({ a: analysisCache.get(i.id), title: i.title }))
+        .filter((x) => x.a && !x.a.single && !x.a.lot && !x.a.graded && !x.a.foreign && !x.a.nameSetTried)
+        .slice(0, MAX_LOOKUPS);
+      await pool(noNum, 4, async ({ a, title }) => {
+        let m;
+        try {
+          m = await resolveByNameSet(a, title);
+        } catch {
+          m = undefined;
+        }
+        if (m === undefined) return;
+        a.nameSetTried = true;
+        if (m) {
+          a.single = true;
+          a.number = m.number;
+          a.total = m.total;
+          a.market = m;
+          a.via = 'extension';
+        }
+      });
+      // photo déjà lue (cache) : on réapplique la lecture si l'analyse a été recalculée
       for (const it of items) {
         const e = langCache.get(it.id);
         const a = analysisCache.get(it.id);
-        if (e && e.ocrText && a && a.single && a.market !== undefined && !a.reconciled) await reconcile(it, a, e.ocrText);
+        if (e && e.ocrText && a && !a.reconciled && (!a.single || a.market !== undefined)) await refineWithPhoto(it, a, e.ocrText);
       }
       if (analysisCache.size > 3000) [...analysisCache.keys()].slice(0, 800).forEach((k) => analysisCache.delete(k));
     }
@@ -617,7 +679,7 @@
       const unverified = !!m && (m.nameChecked === false || !!m.multi); // identification moins sûre
       if (unverified && level === 'top') level = 'good';
       const gap = Math.round((paid / mkt - 1) * 100); // écart du prix payé vs prix de référence, en %
-      return { market: r2(mkt), source, paid: r2(paid), ship: r2(ship), cost: r2(cost), sell: r2(sell), margin: r2(margin), roi: r2(roi), score, gap, level, unverified, matched: m ? m.matched : a && a.market ? a.market.matched : '', cmUrl: (a && a.market && a.market.url) || '', image: (m && m.image) || '' };
+      return { market: r2(mkt), source, paid: r2(paid), ship: r2(ship), cost: r2(cost), sell: r2(sell), margin: r2(margin), roi: r2(roi), score, gap, level, unverified, via: (a && a.via) || 'titre', matched: m ? m.matched : a && a.market ? a.market.matched : '', cmUrl: (a && a.market && a.market.url) || '', image: (m && m.image) || '' };
     }
 
     // Pourquoi pas de score ? (l'interface l'affiche : un score doit toujours être là, ou expliquer son absence)
@@ -626,9 +688,10 @@
       if (a.lot) return a.lotCount ? `lot de ${a.lotCount} cartes : pas de score` : 'lot : pas de score';
       if (a.graded) return 'carte gradée : prix à vérifier à la main';
       if (a.foreign) return 'carte étrangère : pas de score';
-      if (!a.single) return 'pas de numéro n/total dans le titre';
+      if (ocrAvailable && needsLangCheck(it, a)) return 'lecture de la photo en cours';
+      if (!a.single) return 'carte non reconnue (ni numéro, ni nom + extension, ni photo lisible)';
       if (a.market === undefined) return 'prix en cours de recherche';
-      if (a.market === null) return 'carte non identifiée de façon sûre (nom ou extension absents du titre)';
+      if (a.market === null) return 'carte non identifiée de façon sûre (nom introuvable sur le titre et la photo)';
       return 'pas de prix Cardmarket pour cette carte';
     }
 

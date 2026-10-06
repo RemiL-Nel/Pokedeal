@@ -397,7 +397,7 @@ function itemEl(it){
     meta.appendChild(tag('div', 'deal ' + d.level, icon + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin)));
     meta.appendChild(tag('div', 'sm', 'Achat ' + fmt(d.paid) + ' + port ' + fmt(d.ship) + ' = ' + fmt(d.cost) + ' · revente nette ~' + fmt(d.sell)));
     meta.appendChild(tag('div', 'sm', (d.source === 'manuel' ? 'Ton prix de référence ' : 'Cardmarket (tendance) ') + fmt(d.market) + ' · prix payé ' + (d.gap > 0 ? '+' : '') + d.gap + ' % vs réf.'));
-    if (d.source !== 'manuel') meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.unverified ? 'identification moins sûre, vérifie la carte · ' : '') + 'toutes langues et états confondus'));
+    if (d.source !== 'manuel') meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.via === 'photo' ? 'reconnue sur la photo · ' : d.via === 'extension' ? 'reconnue par nom + extension · ' : '') + (d.unverified ? 'identification moins sûre, vérifie la carte · ' : '') + 'toutes langues et états confondus'));
   } else {
     meta.appendChild(tag('div', 'deal none', 'Score — · ' + (it.scoreReason || 'indisponible')));
     if (it.lot) meta.appendChild(tag('div', 'sm', 'Lot de ' + it.lot.count + ' cartes · ' + fmt(it.lot.perCard) + ' / carte'));
