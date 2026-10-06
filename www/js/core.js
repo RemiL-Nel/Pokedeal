@@ -91,7 +91,7 @@
         storage.setItem(k, JSON.stringify(v));
       } catch {}
     };
-    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05, frOnly: true, langCheck: false, langModel: 'claude-haiku-4-5-20251001' });
+    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05, frMode: 'strict', langCheck: false, langModel: 'claude-haiku-4-5-20251001' });
     const defState = () => ({
       watch: { enabled: false, queries: ['carte pokemon'], maxPrice: null, onlyDeals: true, intervalSec: 60 },
       budget: { monthly: 0 },
@@ -246,6 +246,15 @@
       return a === String(n) || String(parseInt(a, 10)) === String(n);
     };
 
+    // L'extension est-elle citée dans le titre (« fossil » ↔ « Fossile », « Fable Nébuleuse »…) ?
+    const SET_STOP = new Set(['set', 'base', 'pokemon', 'carte', 'cartes', 'promo', 'promos', 'collection', 'serie', 'series', 'edition', 'illustration', 'coffret']);
+    function setEvidence(setName, titlePlain) {
+      return plain(setName)
+        .split(' ')
+        .filter((w) => w.length >= 5 && !SET_STOP.has(w))
+        .some((w) => titlePlain.includes(w.length > 5 ? w.replace(/(es|e|s)$/, '') : w));
+    }
+
     const cmUrlFor = (name, set) => `https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(`${name} ${set || ''}`.trim())}`;
 
     function tcgdexPrice(card, reverse) {
@@ -257,7 +266,7 @@
     }
 
     // Renvoie : objet carte+prix, null (carte non identifiée de façon sûre) ou undefined (erreur réseau/format, à réessayer).
-    async function resolveTcgdex(a, title) {
+    async function resolveTcgdex(a, title, lenient) {
       const sets = await getJson(`${TCGDEX}/v2/fr/sets`, DAY);
       if (!Array.isArray(sets)) return undefined;
       const count = (x) => x.cardCount || {};
@@ -275,8 +284,8 @@
       let pick = found.filter((f) => f.named);
       let nameChecked = true;
       if (!pick.length) {
-        // le titre ne contient pas le nom : on n'accepte que si une seule extension est possible
-        if (found.length !== 1) return null;
+        // le nom n'est pas dans le titre : une seule extension possible ET (extension citée dans le titre, ou mode « scan » où l'utilisateur tient la carte)
+        if (found.length !== 1 || !(lenient || setEvidence(found[0].set.name, t))) return null;
         pick = found;
         nameChecked = false;
       }
@@ -296,7 +305,7 @@
       };
     }
 
-    async function resolveTcgIo(a) {
+    async function resolveTcgIo(a, title, lenient) {
       const q = `number:"${a.number}" set.printedTotal:${a.total}`;
       const headers = { accept: 'application/json' };
       if (settings.tcgKey) headers['x-api-key'] = settings.tcgKey;
@@ -305,6 +314,7 @@
       const list = ((await r.json()).data || []).filter((c) => c.cardmarket && c.cardmarket.prices);
       if (list.length !== 1) return null; // plusieurs cartes possibles et pas de nom français pour trancher : on n'invente rien
       const c = list[0];
+      if (!(lenient || setEvidence(c.set.name, plain(title)))) return null;
       const p = c.cardmarket.prices;
       const trend = Number(a.reverse ? p.reverseHoloTrend || p.trendPrice : p.trendPrice || p.avg30);
       return {
@@ -318,13 +328,13 @@
       };
     }
 
-    async function resolveCard(a, title) {
+    async function resolveCard(a, title, lenient) {
       try {
-        const v = await resolveTcgdex(a, title);
+        const v = await resolveTcgdex(a, title, lenient);
         if (v !== undefined) return v;
       } catch {}
       try {
-        return await resolveTcgIo(a);
+        return await resolveTcgIo(a, title, lenient);
       } catch {
         return undefined;
       }
@@ -393,9 +403,15 @@
     }
 
     /* ---------- Lecture du texte OCR d'une carte (sans IA) ---------- */
-    const FR_WORDS = [/\bfaiblesse\b/, /\bretraite\b/, /\bevolue de\b/, /\bpokemon de base\b/, /\bstade [12]\b/, /\bdresseur\b/, /\benergie\b/, /\bpv\s*\d/, /\btalent\b/, /\battaque\b/];
-    const EN_WORDS = [/\bweakness\b/, /\bretreat\b/, /\bevolves from\b/, /\bbasic pokemon\b/, /\bstage [12]\b/, /\btrainer\b/, /\benergy\b/, /\bhp\s*\d/, /\bability\b/, /\battack\b/];
-    // « résistance » et « Illus. » sont identiques en FR/EN : ignorés
+    // Mots imprimés sur les cartes. Ignorés car identiques ou ambigus : « résistance », « Illus. », « PV » (aussi sur les cartes italiennes), « énergie ».
+    const FR_WORDS = [/\bfaiblesse\b/, /\bretraite\b/, /\bevolue de\b/, /\bpokemon de base\b/, /\bstade [12]\b/, /\bdresseur\b/, /\btalent\b/, /\battaque\b/];
+    const EN_WORDS = [/\bweakness\b/, /\bretreat\b/, /\bevolves from\b/, /\bbasic pokemon\b/, /\bstage [12]\b/, /\btrainer\b/, /\bhp\s*\d/, /\bability\b/, /\battack\b/, /\benergy\b/];
+    const OTHER_WORDS = [
+      /\bdebolezza\b/, /\britirata\b/, /\bevolve da\b/, /\bpokemon base\b/, /\bfase [12]\b/, /\ballenatore\b/, /\battacco\b/, // italien
+      /\bschwache\b/, /\bruckzug\b/, /\bentwickelt sich aus\b/, /\bbasis pokemon\b/, /\bphase [12]\b/, /\bangriff\b/, // allemand
+      /\bdebilidad\b/, /\bretirada\b/, /\bevoluciona de\b/, /\bpokemon basico\b/, /\bentrenador\b/, /\bataque\b/, // espagnol / portugais
+      /\bfraqueza\b/, /\brecuo\b/, /\bevolui de\b/, /\btreinador\b/,
+    ];
     function parseCardText(text) {
       const raw = String(text || '').replace(/(?<![A-Za-z])[Oo](?=\d{1,2}\s*\/)/g, '0'); // « O04/102 » lu par l'OCR
       const t = plain(raw);
@@ -406,10 +422,12 @@
         if (tot >= 15 && n >= 1 && n <= tot + 150) nums.push({ number: String(n), total: tot });
       }
       const num = nums.length ? nums[nums.length - 1] : null; // le numéro est en bas de carte : dernier lu
-      const fr = FR_WORDS.filter((r) => r.test(t)).length;
-      const en = EN_WORDS.filter((r) => r.test(t)).length;
-      const lang = fr > en ? 'fr' : en > fr ? 'other' : 'unknown';
-      return { number: num ? num.number : '', total: num ? num.total : 0, lang, strong: Math.max(fr, en) >= 2 && fr !== en, frHits: fr, enHits: en };
+      const count = (list) => list.filter((r) => r.test(t)).length;
+      const cjk = (raw.match(/[぀-ヿ㐀-鿿가-힯]/g) || []).length; // coréen, japonais, chinois
+      const fr = count(FR_WORDS);
+      const foreign = count(EN_WORDS) + count(OTHER_WORDS) + (cjk >= 6 ? 3 : 0);
+      const lang = fr > foreign ? 'fr' : foreign > fr ? 'other' : 'unknown';
+      return { number: num ? num.number : '', total: num ? num.total : 0, lang, strong: Math.max(fr, foreign) >= 2 && fr !== foreign, frHits: fr, foreignHits: foreign, cjk };
     }
 
     /* ---------- Langue de la carte ---------- */
@@ -427,12 +445,13 @@
       return fr && !other ? 'fr' : other && !fr ? 'other' : 'unknown';
     }
 
+    let langJob = null;
     const langCache = new Map(); // id d'annonce -> { v: 'fr'|'other'|'unknown', src, tries, ocr, ai }
     let langCooldownUntil = 0;
     let lastLangError = null;
     const ocrAvailable = typeof env.ocr === 'function'; // reconnaissance de texte sur le téléphone, gratuite
     const langCheckOn = () => !!(settings.langCheck && settings.anthropicKey);
-    const LANG_MAX = 8; // vérifications de photo par passage
+    const LANG_MAX = 24; // vérifications de photo par passage
 
     // Langue retenue : titre explicite > photo (OCR puis IA) > nom français dans le titre > inconnue
     function langOf(it, a) {
@@ -443,11 +462,22 @@
       if (a && a.market && a.market.nameChecked) return { lang: 'fr', src: 'nom' };
       return { lang: 'unknown', src: '' };
     }
+    // La photo d'un lot ne dit rien de la langue ; l'IA (payante) n'est consultée que pour les cartes identifiées
     const needsLangCheck = (it, a) => {
-      if (!(a && a.single && it.photo && langOf(it, a).lang === 'unknown')) return false;
+      if (!(a && !a.lot && it.photo && langOf(it, a).lang === 'unknown')) return false;
       const e = langCache.get(it.id) || {};
-      return (ocrAvailable && !e.ocr) || (langCheckOn() && !e.ai && (e.tries || 0) < 2);
+      return (ocrAvailable && !e.ocr) || (langCheckOn() && a.single && !e.ai && (e.tries || 0) < 2);
     };
+    // Filtre « cartes françaises » : strict = langue française confirmée ; loose = pas de langue étrangère confirmée ; off = tout.
+    // Les lots (langue invérifiable) restent visibles sauf s'ils annoncent une autre langue.
+    function frKeep(it, a) {
+      const m = settings.frMode;
+      if (m === 'off') return true;
+      const l = langOf(it, a).lang;
+      if (l === 'fr') return true;
+      if (l === 'other') return false;
+      return m === 'loose' || !!(a && a.lot);
+    }
 
     async function checkLangPhoto(it) {
       const entry = langCache.get(it.id) || { v: 'unknown', tries: 0 };
@@ -486,7 +516,7 @@
       if (Date.now() < langCooldownUntil) return;
       const todo = items.filter((it) => needsLangCheck(it, analysisCache.get(it.id))).slice(0, LANG_MAX);
       if (!todo.length) return;
-      await pool(todo, 2, async (it) => {
+      await pool(todo, 3, async (it) => {
         try {
           await checkLangPhoto(it);
           lastLangError = null;
@@ -509,7 +539,6 @@
         if (v === undefined) a.tries++;
         else a.market = v;
       });
-      await checkLanguages(items);
       if (analysisCache.size > 3000) [...analysisCache.keys()].slice(0, 800).forEach((k) => analysisCache.delete(k));
     }
 
@@ -548,7 +577,7 @@
       const analysis = a && a.single ? { name: m ? m.name : '', number: `${a.number}/${a.total}`, set: m ? m.set : '' } : null;
       const lot = a && a.lotCount && it.price != null ? { count: a.lotCount, perCard: r2((it.totalPrice != null ? it.totalPrice : it.price) / a.lotCount) } : null;
       const lg = langOf(it, a);
-      return { ...it, analysis, lot, graded: !!(a && a.graded), lang: lg.lang, langSrc: lg.src, deal: dealFor(it, a) };
+      return { ...it, analysis, lot, isLot: !!(a && a.lot), graded: !!(a && a.graded), lang: lg.lang, langSrc: lg.src, deal: dealFor(it, a) };
     }
 
     /* ---------- Identification d'une carte photographiée ---------- */
@@ -724,6 +753,7 @@
       try {
         const items = await searchMany(w.queries, { max: w.maxPrice });
         await analyzeItems(items);
+        await checkLanguages(items);
         const firstPass = !primed;
         for (const it of items) {
           if (notified.has(it.id)) continue;
@@ -733,7 +763,7 @@
           }
           if (!isReady(analysisCache.get(it.id), it)) continue; // prix de référence pas encore connu : au prochain passage
           notified.add(it.id);
-          if (settings.frOnly && langOf(it, analysisCache.get(it.id)).lang === 'other') continue; // pas une carte française
+          if (!frKeep(it, analysisCache.get(it.id))) continue; // pas (confirmée) une carte française
           const d = dealFor(it, analysisCache.get(it.id));
           if (w.onlyDeals && !(d && d.level !== 'none')) continue;
           const t = dealTexts(it, d);
@@ -800,9 +830,19 @@
         const queries = (url.searchParams.get('q') || 'carte pokemon').split('|').map((s) => s.trim()).filter(Boolean);
         const items = await searchMany(queries.length ? queries : ['carte pokemon'], { min: url.searchParams.get('min'), max: url.searchParams.get('max') });
         await analyzeItems(items);
+        // la lecture des photos (OCR) tourne en arrière-plan : les annonces en attente apparaissent au rafraîchissement suivant
+        const needNow = items.filter((i) => needsLangCheck(i, analysisCache.get(i.id))).length;
+        if (needNow && !langJob) {
+          langJob = checkLanguages(items).catch(() => {}).finally(() => {
+            langJob = null;
+          });
+        }
         const all = items.map(decorate);
-        const kept = settings.frOnly ? all.filter((i) => i.lang !== 'other') : all;
-        return { items: kept, hiddenOther: all.length - kept.length, fetchedAt: Date.now(), scoring: true, langError: lastLangError };
+        const kept = all.filter((i) => frKeep(i, analysisCache.get(i.id)));
+        const pending = needNow + (langJob ? 1 : 0); // lecture en cours = pas fini
+        const hidden = { other: all.filter((i) => i.lang === 'other').length };
+        hidden.unverified = all.length - kept.length - hidden.other;
+        return { items: kept, hidden, hiddenOther: hidden.other, pending, fetchedAt: Date.now(), scoring: true, langError: lastLangError };
       }
       if (p === '/api/state' && method === 'GET') {
         return {
@@ -811,7 +851,7 @@
           budget: state.budget,
           inventory: state.inventory,
           stats: stats(),
-          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut, frOnly: !!settings.frOnly, langCheck: !!settings.langCheck },
+          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut, frMode: settings.frMode, langCheck: !!settings.langCheck },
           config: { canIdentify: canIdentify(), canScore: true, canNotify: true, canTelegram: canTelegram() },
         };
       }
@@ -819,7 +859,9 @@
         const b = body || {};
         for (const k of ['anthropicKey', 'tgToken', 'tgChat', 'tcgKey', 'model']) if (typeof b[k] === 'string' && b[k].trim()) settings[k] = b[k].trim();
         for (const k of Array.isArray(b.clear) ? b.clear : []) if (['anthropicKey', 'tgToken', 'tgChat', 'tcgKey'].includes(k)) settings[k] = '';
-        for (const k of ['frOnly', 'langCheck']) if (typeof b[k] === 'boolean') settings[k] = b[k];
+        if (typeof b.langCheck === 'boolean') settings.langCheck = b.langCheck;
+        if (['strict', 'loose', 'off'].includes(b.frMode)) settings.frMode = b.frMode;
+        if (typeof b.frOnly === 'boolean') settings.frMode = b.frOnly ? 'strict' : 'off'; // ancien réglage
         if (b.shipIn != null && b.shipIn !== '') settings.shipIn = r2(Math.max(0, num(b.shipIn, 3)));
         if (b.feeOut != null && b.feeOut !== '') settings.feeOut = Math.min(0.5, Math.max(0, num(b.feeOut, 0.05)));
         saveSettings();
@@ -829,7 +871,7 @@
       if (p === '/api/identify' && method === 'POST') {
         const card = await identifyCard(body && body.image);
         const nm = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(card.number || '');
-        const market = nm ? await resolveCard({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }, `${card.name_fr || ''} ${card.name || ''}`) : null;
+        const market = nm ? await resolveCard({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }, `${card.name_fr || ''} ${card.name || ''}`, true) : null;
         return { card, market, listing: buildListing(card, market ? market.trend : null) };
       }
       if (p === '/api/scan' && method === 'POST') {
@@ -844,14 +886,14 @@
           total = parseInt(man[2], 10);
         }
         const condition = ['Neuf', 'Très bon état', 'Bon état', 'Satisfaisant'].includes(b.condition) ? b.condition : 'Très bon état';
-        const language = parsed.lang === 'fr' ? 'FR' : parsed.lang === 'other' ? 'EN' : '';
+        const language = parsed.lang === 'fr' ? 'FR' : '';
         const ocr = { number: parsed.number ? `${parsed.number}/${parsed.total}` : '', lang: parsed.lang };
         const base = { language, condition, rarity: '', condition_notes: '' };
         if (!number || !total) {
           const card = { ...base, name_fr: String(b.name || '').trim(), name: '', set: '', number: '' };
           return { found: false, card, market: null, listing: buildListing(card, null), ocr };
         }
-        const market = await resolveCard({ number, total }, `${b.text || ''} ${b.name || ''}`);
+        const market = await resolveCard({ number, total }, `${b.text || ''} ${b.name || ''}`, true);
         if (market === undefined) throw new Error('Prix indisponibles pour le moment, réessaie dans un instant.');
         const card = { ...base, name_fr: market ? market.name : String(b.name || '').trim(), name: '', set: market ? market.set : '', number: `${number}/${total}` };
         return { found: !!market, card, market, listing: buildListing(card, market ? market.trend : null), ocr };

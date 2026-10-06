@@ -110,7 +110,7 @@ a.link{color:var(--acc2)}
     <span class="chip" id="chipSound">Son : off</span>
     <span class="chip" id="chipOnlyNew">Nouvelles</span>
     <span class="chip" id="chipDeals">Bonnes affaires</span>
-    <span class="chip on" id="chipFr">🇫🇷 FR seulement</span>
+    <span class="chip on" id="chipFr">🇫🇷 FR confirmées</span>
     <span class="chip" id="chipSort">Tri : score</span>
     <span class="chip" id="chipVariants">+ variantes</span>
   </div>
@@ -273,7 +273,14 @@ async function notify({title, body, url}){
 /* OCR sur le téléphone (Google ML Kit, hors ligne, gratuit) */
 const TR = plug('TextRecognition'), FSP = plug('Filesystem');
 let ocrSeq = 0;
-async function ocrFromUri(uri){ const r = await TR.processImage({path: uri}); return (r && r.text) || ''; }
+async function ocrFromUri(uri){
+  const read = async (script) => { try{ const r = await TR.processImage(script ? {path: uri, script} : {path: uri}); return (r && r.text) || ''; }catch(e){ return ''; } };
+  let text = await read();
+  // pas de français net sur la photo : on cherche aussi du coréen / japonais (modèles embarqués)
+  const r = core.parseCardText(text);
+  if (!(r.lang === 'fr' && r.strong)) text += '\n' + await read('KOREAN') + '\n' + await read('JAPANESE');
+  return text;
+}
 async function ocrFromUrl(url){
   const name = 'ocr' + (ocrSeq++ % 6) + '.jpg';
   await FSP.downloadFile({url, path: name, directory: 'CACHE'});
@@ -298,7 +305,7 @@ function toast(msg){ const t = $('#toast'); t.textContent = msg; t.style.display
 
 let app = {watch: {}, watchStatus: {}, budget: {}, inventory: [], stats: null, config: {}, settings: {}};
 let live = true, sound = false, onlyNew = false, onlyDeals = false, sortScore = false;
-let seen = new Set(), newIds = new Set(), firstLoad = true, items = [], timer = null, lastDataUrl = null, curTab = 'recent';
+let pendTries = 0, seen = new Set(), newIds = new Set(), firstLoad = true, items = [], timer = null, lastDataUrl = null, curTab = 'recent';
 
 /* ---------- Onglets ---------- */
 function showTab(name){
@@ -422,8 +429,10 @@ async function load(){
     items = j.items; firstLoad = false;
     render();
     if (fresh) { if (sound) beep(); if (navigator.vibrate) navigator.vibrate(120); }
+    // la lecture des photos (langue) se poursuit en arrière-plan : on rafraîchit vite tant qu'elle n'est pas finie
+    if (j.pending && pendTries < 10) { pendTries++; setTimeout(() => { if (curTab === 'recent') load(); }, 4000); } else if (!j.pending) pendTries = 0;
     const deals = items.filter(i => i.deal && i.deal.level !== 'none').length;
-    $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + (j.hiddenOther ? ` · ${j.hiddenOther} masquée(s) (autre langue)` : '') + (j.langError ? ' · vérif. langue indisponible' : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
+    $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + (j.hidden && j.hidden.other ? ` · ${j.hidden.other} autre(s) langue(s)` : '') + (j.hidden && j.hidden.unverified ? ` · ${j.hidden.unverified} non confirmée(s)` : '') + (j.pending ? ' · lecture des photos…' : '') + (j.langError ? ' · vérif. langue indisponible' : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
   }catch(e){
     $('#dot').classList.remove('live'); $('#err').style.display = 'block'; $('#err').textContent = 'Erreur : ' + e.message;
   }finally{ loading = false; }
@@ -437,7 +446,12 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 $('#chipLive').onclick = e => { live = !live; e.target.classList.toggle('on', live); schedule(); };
 $('#chipSound').onclick = e => { sound = !sound; e.target.classList.toggle('on', sound); e.target.textContent = 'Son : ' + (sound ? 'on' : 'off'); if (sound) beep(); };
 $('#chipOnlyNew').onclick = e => { onlyNew = !onlyNew; e.target.classList.toggle('on', onlyNew); render(); };
-$('#chipFr').onclick = async () => { const on = !((app.settings || {}).frOnly); try{ await api('/api/settings', 'POST', {frOnly: on}); await loadState(); firstLoad = true; seen.clear(); newIds.clear(); load(); }catch(e){ alert('Erreur : ' + e.message); } };
+const FR_MODES = ['strict', 'loose', 'off'];
+const FR_LABEL = {strict: '🇫🇷 FR confirmées', loose: '🇫🇷 FR + non vérifiées', off: 'Toutes langues'};
+$('#chipFr').onclick = async () => {
+  const cur = (app.settings || {}).frMode || 'strict', next = FR_MODES[(FR_MODES.indexOf(cur) + 1) % 3];
+  try{ await api('/api/settings', 'POST', {frMode: next}); await loadState(); firstLoad = true; seen.clear(); newIds.clear(); pendTries = 0; load(); toast(FR_LABEL[next]); }catch(e){ alert('Erreur : ' + e.message); }
+};
 $('#chipSort').onclick = e => { sortScore = !sortScore; e.target.classList.toggle('on', sortScore); render(); };
 $('#chipDeals').onclick = e => { onlyDeals = !onlyDeals; e.target.classList.toggle('on', onlyDeals); render(); };
 $('#chipVariants').onclick = () => { $('#q').value = VARIANTS; refilter(); };
@@ -534,7 +548,7 @@ function renderSettings(){
   $('#sShip').value = s.shipIn ?? 3;
   $('#sFee').value = s.feeOut != null ? Math.round(s.feeOut * 1000) / 10 : 5;
   $('#sLang').checked = !!s.langCheck;
-  $('#chipFr').classList.toggle('on', s.frOnly !== false);
+  const fm = s.frMode || 'strict'; $('#chipFr').textContent = FR_LABEL[fm]; $('#chipFr').classList.toggle('on', fm !== 'off');
 }
 $('#sSave').onclick = async () => {
   const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100, langCheck: $('#sLang').checked};
@@ -600,7 +614,7 @@ function fillKv(el, rows){
 }
 let scan = {text: '', number: '', name: '', mode: 'scan'};
 function showCard(j){
-  fillKv($('#cardInfo'), [['Nom', j.card.name_fr || j.card.name], ['Nom EN', j.card.name_fr && j.card.name !== j.card.name_fr ? j.card.name : ''], ['Extension', j.card.set], ['Numéro', j.card.number], ['Rareté', j.card.rarity], ['Langue', j.card.language], ['État', j.card.condition], ['Défauts', j.card.condition_notes]]);
+  fillKv($('#cardInfo'), [['Nom', j.card.name_fr || j.card.name], ['Nom EN', j.card.name_fr && j.card.name !== j.card.name_fr ? j.card.name : ''], ['Extension', j.card.set], ['Numéro', j.card.number], ['Rareté', j.card.rarity], ['Langue', j.card.language || (j.ocr && j.ocr.lang === 'other' ? 'Pas du français (détecté)' : '')], ['État', j.card.condition], ['Défauts', j.card.condition_notes]]);
   const mi = $('#marketInfo');
   if (j.market) {
     fillKv(mi, [['Correspondance', j.market.matched], ['Tendance', j.market.trend != null ? fmt(j.market.trend) : ''], ['Moyenne 30 j', j.market.avg30 != null ? fmt(j.market.avg30) : ''], ['Prix mini', j.market.low != null ? fmt(j.market.low) : '']]);

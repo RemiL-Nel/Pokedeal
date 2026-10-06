@@ -57,6 +57,7 @@ const tcgHandler = (req, res) => {
   tcgQueries.push(q);
   if (q.includes('number:"4" set.printedTotal:102')) return json(res, 200, { data: [card('Charizard', '4', 'Base Set', 102, { trendPrice: 80, avg30: 78, lowPrice: 60, reverseHoloTrend: 0 })] });
   if (q.includes('number:"58" set.printedTotal:102')) return json(res, 200, { data: [card('Pikachu', '58', 'Base Set', 102, { trendPrice: 3, avg30: 3, lowPrice: 1 })] });
+  if (q.includes('number:"21" set.printedTotal:62')) return json(res, 200, { data: [card('Haunter', '21', 'Fossil', 62, { trendPrice: 36 })] });
   if (q.includes('number:"7" set.printedTotal:99')) return json(res, 200, { data: [card('Machin', '7', 'Set A', 99, { trendPrice: 80 }), card('Truc', '7', 'Set B', 99, { trendPrice: 30 })] });
   json(res, 200, { data: [] });
 };
@@ -67,10 +68,12 @@ const tcgdexHandler = (req, res) => {
   tcgdexCalls.push(req.url);
   if (tcgdexDown) { res.writeHead(500); return res.end('{}'); }
   const u = req.url;
-  if (u === '/v2/fr/sets') return json(res, 200, [{ id: 'base1', name: 'Set de Base', cardCount: { total: 102, official: 102 } }, { id: 'setA', name: 'Set A', cardCount: { total: 99, official: 99 } }, { id: 'setB', name: 'Set B', cardCount: { total: 99, official: 99 } }]);
+  if (u === '/v2/fr/sets') return json(res, 200, [{ id: 'base1', name: 'Set de Base', cardCount: { total: 102, official: 102 } }, { id: 'setA', name: 'Set A', cardCount: { total: 99, official: 99 } }, { id: 'setB', name: 'Set B', cardCount: { total: 99, official: 99 } }, { id: 'fossil1', name: 'Fossile', cardCount: { total: 62, official: 62 } }]);
   if (u === '/v2/fr/sets/base1') return json(res, 200, { id: 'base1', cards: [{ id: 'base1-4', localId: '4', name: 'Dracaufeu' }, { id: 'base1-58', localId: '58', name: 'Pikachu' }] });
   if (u === '/v2/fr/sets/setA') return json(res, 200, { id: 'setA', cards: [{ id: 'setA-7', localId: '7', name: 'Machin' }] });
   if (u === '/v2/fr/sets/setB') return json(res, 200, { id: 'setB', cards: [{ id: 'setB-7', localId: '007', name: 'Truc-EX' }] });
+  if (u === '/v2/fr/sets/fossil1') return json(res, 200, { id: 'fossil1', cards: [{ id: 'fossil1-21', localId: '21', name: 'Spectrum' }] });
+  if (u === '/v2/fr/cards/fossil1-21') return json(res, 200, dexCard('fossil1-21', '21', 'Spectrum', 36.35));
   if (u === '/v2/fr/cards/base1-4') return json(res, 200, dexCard('base1-4', '4', 'Dracaufeu', 80));
   if (u === '/v2/fr/cards/base1-58') return json(res, 200, dexCard('base1-58', '58', 'Pikachu', 3));
   if (u === '/v2/fr/cards/setA-7') return json(res, 200, dexCard('setA-7', '7', 'Machin', 80, { 'trend-holo': 120 }));
@@ -108,6 +111,8 @@ function fakeNative(log) {
 
 const memStorage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// la lecture des photos tourne en arrière-plan : on rafraîchit jusqu'à ce qu'il n'y ait plus d'annonce en attente
+const settle = async (core, path = '/api/recent?q=x') => { let j; for (let i = 0; i < 25; i++) { j = await core.api(path); if (!j.pending) break; await sleep(30); } return j; };
 
 /* ---------- Mini lanceur ---------- */
 const tests = [];
@@ -168,48 +173,57 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(claudeCalls.length, claudeBefore, "aucun appel à l'API Claude pour scorer");
   });
 
-  test('Reconnaissance : le nom français du titre tranche entre extensions de même numéro/total', async () => {
+  const withItems = async (list, fn) => {
     const saved = vintedItems.slice();
     vintedItems.length = 0;
-    vintedItems.push({ id: 7, title: 'Truc ex 7/99 neuve', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } }); // Set B (nom EX dans le titre)
-    vintedItems.push({ id: 8, title: 'Machin 007/99 reverse', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } }); // Set A, reverse holo
-    vintedItems.push({ id: 9, title: 'Carte pokemon 7/99', price: { amount: '0.5' }, photo: { url: 'x' }, user: { login: 'c' } }); // pas de nom, 2 extensions : non identifiée
-    vintedItems.push({ id: 10, title: 'Carte neuve 4/102', price: { amount: '5.0' }, photo: { url: 'x' }, user: { login: 'd' } }); // pas de nom mais 1 seule extension
-    vintedItems.push({ id: 11, title: 'Mewtwo 4/102', price: { amount: '5.0' }, photo: { url: 'x' }, user: { login: 'e' } }); // mauvais nom : le nom connu est Dracaufeu
-    const core = mk();
-    const j = await core.api('/api/recent?q=x');
-    vintedItems.length = 0;
-    vintedItems.push(...saved);
-    const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
-    assert.equal(byId[7].deal.matched.startsWith('Truc-EX — Set B'), true);
-    assert.equal(byId[7].deal.market, 30);
-    assert.equal(byId[7].deal.score, 100);
-    assert.equal(byId[7].deal.level, 'top');
-    assert.equal(byId[8].deal.market, 120, 'reverse : prix holo');
-    assert.equal(byId[9].deal, null, 'ambiguë sans nom : pas de score plutôt qu\'un faux');
-    assert.equal(byId[10].deal.unverified, true);
-    assert.equal(byId[10].deal.level, 'good', 'nom absent du titre : jamais « top »');
-    assert.equal(byId[10].deal.gap, Math.round((5 / 80 - 1) * 100));
-    assert.equal(byId[11].deal.unverified, true, 'une seule extension possible : acceptée mais signalée');
-  });
+    vintedItems.push(...list.map(([id, title, photo]) => ({ id, title, price: { amount: '5.0' }, photo: { url: photo || 'http://x/' + id + '.jpg' }, user: { login: 'u' + id } })));
+    try { return await fn(); } finally { vintedItems.length = 0; vintedItems.push(...saved); }
+  };
 
-  test('Repli pokemontcg.io si TCGdex est en panne : seulement si le numéro est sans ambiguïté', async () => {
-    const saved = vintedItems.slice();
-    vintedItems.length = 0;
-    vintedItems.push({ id: 21, title: 'Pikachu 58/102', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } });
-    vintedItems.push({ id: 22, title: 'Truc 7/99', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } });
-    tcgdexDown = true;
-    try {
-      const j = await mk().api('/api/recent?q=x');
-      const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
-      assert.equal(byId[21].deal.market, 3);
-      assert.equal(byId[21].deal.unverified, true);
-      assert.equal(byId[22].deal, null, 'deux cartes possibles : rien');
-    } finally {
-      tcgdexDown = false;
-      vintedItems.length = 0;
-      vintedItems.push(...saved);
-    }
+  test('Reconnaissance : nom français OU extension citée dans le titre, sinon pas de carte', async () => {
+    await withItems([
+      [7, 'Truc ex 7/99 neuve'],            // nom (Set B) dans le titre
+      [8, 'Machin 007/99 reverse'],         // nom (Set A) + reverse holo
+      [9, 'Carte pokemon 7/99'],            // 2 extensions, aucun nom : rien
+      [10, 'Carte neuve 4/102'],            // 1 extension mais aucune preuve : rien (pourrait être une carte étrangère)
+      [11, 'Mewtwo 4/102'],                 // mauvais nom : rien
+      [12, 'Haunter 21/62 set fossil'],     // nom anglais mais extension citée : accepté, signalé
+    ], async () => {
+      await core0().api('/api/settings', 'POST', {});
+      const core = mk();
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      const j = await core.api('/api/recent?q=x');
+      const by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(by[7].deal.matched.startsWith('Truc-EX — Set B'), true);
+      assert.equal(by[7].deal.market, 30);
+      assert.equal(by[7].deal.score, 100);
+      assert.equal(by[7].deal.level, 'top');
+      assert.equal(by[8].deal.market, 120, 'reverse : prix holo');
+      assert.equal(by[9].deal, null);
+      assert.equal(by[10].deal, null, 'numéro seul : pas assez sûr');
+      assert.equal(by[11].deal, null);
+      assert.equal(by[12].deal.unverified, true);
+      assert.equal(by[12].deal.market, 36.35);
+      assert.equal(by[12].deal.level, 'good', 'nom absent du titre : jamais « top »');
+      assert.equal(by[12].deal.gap, Math.round((5 / 36.35 - 1) * 100));
+    });
+  });
+  const core0 = () => mk();
+
+  test('Repli pokemontcg.io si TCGdex est en panne : une seule carte possible ET extension citée', async () => {
+    await withItems([[21, 'Haunter 21/62 fossil'], [22, 'Pikachu 58/102'], [23, 'Truc 7/99']], async () => {
+      tcgdexDown = true;
+      try {
+        const core = mk();
+        await core.api('/api/settings', 'POST', { frMode: 'off' });
+        const j = await core.api('/api/recent?q=x');
+        const by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+        assert.equal(by[21].deal.market, 36);
+        assert.equal(by[21].deal.unverified, true);
+        assert.equal(by[22].deal, null, 'aucune preuve (nom ou extension) : rien');
+        assert.equal(by[23].deal, null, 'deux cartes possibles : rien');
+      } finally { tcgdexDown = false; }
+    });
   });
 
   test('Cache : une extension / carte n\'est demandée qu\'une fois', async () => {
@@ -221,68 +235,61 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(tcgdexCalls.length, n, 'deuxième rafraîchissement : aucun nouvel appel TCGdex');
   });
 
-  test('Langue : titre explicite, nom français, puis photo (IA) seulement si nécessaire', async () => {
-    const saved = vintedItems.slice();
-    vintedItems.length = 0;
-    const mkItem = (id, title, photo = 'http://x/' + id + '.jpg') => ({ id, title, price: { amount: '5.0' }, photo: { url: photo }, user: { login: 'u' + id } });
-    vintedItems.push(mkItem(31, 'Dracaufeu 4/102 FR'));                    // FR dans le titre
-    vintedItems.push(mkItem(32, 'Dracaufeu 4/102 version anglaise'));      // anglais dans le titre
-    vintedItems.push(mkItem(33, 'Carte neuve 4/102', 'http://x/en/33.jpg')); // rien dans le titre, photo anglaise
-    vintedItems.push(mkItem(34, 'Carte neuve 58/102', 'http://x/fr/34.jpg')); // rien dans le titre, photo française
-    vintedItems.push(mkItem(35, 'Dracaufeu 4/102 neuf'));                  // nom français dans le titre
-    vintedItems.push(mkItem(36, 'Carte neuve 4/102 EN'));                  // code EN
-    vintedItems.push(mkItem(37, 'CARTE NEUVE EN POCHETTE 4/102'));         // titre en majuscules : « EN » est du français ici
-    try {
-      // sans clé : pas d'appel IA, la langue vient du titre
+  test('Filtre FR : strict (confirmée), loose (pas de langue étrangère), off ; IA seulement si nécessaire', async () => {
+    await withItems([
+      [31, 'Dracaufeu 4/102 FR'],
+      [32, 'Dracaufeu 4/102 version anglaise'],
+      [33, 'Carte neuve 4/102', 'http://x/en/33.jpg'],
+      [34, 'Carte neuve 58/102', 'http://x/fr/34.jpg'],
+      [35, 'Dracaufeu 4/102 neuf'],
+      [36, 'Carte neuve 4/102 EN'],
+      [37, 'CARTE NEUVE EN BON ETAT 4/102'],
+      [38, 'Lot 200 cartes pokemon'],
+    ], async () => {
+      const ids = (j) => j.items.map((i) => i.id).sort((x, y) => x - y);
+      // sans clé ni OCR : seules les cartes confirmées françaises restent (titre FR, nom français) ; le lot est conservé
       langCalls.length = 0;
-      let j = await mk().api('/api/recent?q=x');
-      let by = Object.fromEntries(j.items.map((i) => [i.id, i]));
-      assert.equal(langCalls.length, 0);
-      assert.equal(by[31].lang, 'fr');
-      assert.equal(by[35].lang, 'fr'); assert.equal(by[35].langSrc, 'nom');
-      assert.equal(by[32], undefined, 'anglaise dans le titre : masquée');
-      assert.equal(by[36], undefined, 'EN : masquée');
-      assert.equal(by[33].lang, 'unknown');
-      assert.ok(by[37], 'EN en majuscules dans un titre tout en majuscules : pas une langue');
-      assert.equal(j.hiddenOther, 2);
-      // avec clé + vérification photo : seules les annonces sans indice partent à l'IA, modèle économique
       const core = mk();
-      await core.api('/api/settings', 'POST', { anthropicKey: 'sk-test', langCheck: true });
-      j = await core.api('/api/recent?q=x');
-      by = Object.fromEntries(j.items.map((i) => [i.id, i]));
-      assert.equal(by[33], undefined, 'photo en anglais : masquée');
-      assert.equal(by[34].lang, 'fr'); assert.equal(by[34].langSrc, 'photo');
-      const urls = langCalls.map((c) => c.url);
-      assert.ok(urls.includes('http://x/en/33.jpg') && urls.includes('http://x/fr/34.jpg'));
-      assert.ok(!urls.some((u) => /\/(31|32|35|36)\.jpg$/.test(u)), 'pas de photo envoyée quand le titre ou le nom suffit');
+      let j = await core.api('/api/recent?q=x');
+      assert.deepEqual(ids(j), [31, 35, 38]);
+      assert.deepEqual(j.hidden, { other: 2, unverified: 3 });
+      assert.equal(langCalls.length, 0);
+      await core.api('/api/settings', 'POST', { frMode: 'loose' });
+      assert.deepEqual(ids(await core.api('/api/recent?q=x')), [31, 33, 34, 35, 37, 38]);
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      assert.equal((await core.api('/api/recent?q=x')).items.length, 8);
+      // avec clé + option : seules les annonces sans indice partent à l'IA (modèle économique), en cache ensuite
+      const core2 = mk();
+      await core2.api('/api/settings', 'POST', { anthropicKey: 'sk-test', langCheck: true });
+      j = await settle(core2);
+      assert.deepEqual(ids(j), [31, 34, 35, 37, 38], 'photo 33 en anglais : masquée ; 34 et 37 lues FR par l\'IA');
+      assert.equal(j.items.find((i) => i.id === 34).langSrc, 'photo');
+      const urls = langCalls.map((c) => c.url).sort();
+      assert.deepEqual(urls, ['http://x/37.jpg', 'http://x/en/33.jpg', 'http://x/fr/34.jpg']);
       assert.ok(langCalls.every((c) => /haiku/.test(c.model)));
       const n = langCalls.length;
-      await core.api('/api/recent?q=x');
-      assert.equal(langCalls.length, n, 'résultat mis en cache : pas de nouvel appel');
-      // FR seulement désactivé : tout revient
-      await core.api('/api/settings', 'POST', { frOnly: false });
-      j = await core.api('/api/recent?q=x');
-      assert.ok(j.items.find((i) => i.id === 33) && j.items.find((i) => i.id === 32));
-    } finally {
-      vintedItems.length = 0;
-      vintedItems.push(...saved);
-    }
+      await settle(core2);
+      assert.equal(langCalls.length, n, 'résultat mis en cache');
+    });
+  });
+
+  test('Filtre FR : ancien réglage frOnly, valeurs invalides ignorées', async () => {
+    const core = mk();
+    assert.equal((await core.api('/api/state')).settings.frMode, 'strict');
+    await core.api('/api/settings', 'POST', { frOnly: false });
+    assert.equal((await core.api('/api/state')).settings.frMode, 'off');
+    await core.api('/api/settings', 'POST', { frMode: 'nimportequoi' });
+    assert.equal((await core.api('/api/state')).settings.frMode, 'off');
   });
 
   test('Langue : mauvaise clé => annonces conservées, erreur signalée', async () => {
-    const saved = vintedItems.slice();
-    vintedItems.length = 0;
-    vintedItems.push({ id: 41, title: 'Carte neuve 4/102', price: { amount: '5.0' }, photo: { url: 'http://x/41.jpg' }, user: { login: 'a' } });
-    try {
+    await withItems([[41, 'Carte neuve 4/102']], async () => {
       const core = mk();
-      await core.api('/api/settings', 'POST', { anthropicKey: 'mauvaise', langCheck: true });
-      const j = await core.api('/api/recent?q=x');
+      await core.api('/api/settings', 'POST', { anthropicKey: 'mauvaise', langCheck: true, frMode: 'loose' });
+      const j = await settle(core);
       assert.equal(j.items.length, 1);
       assert.match(j.langError, /401/);
-    } finally {
-      vintedItems.length = 0;
-      vintedItems.push(...saved);
-    }
+    });
   });
 
   const FR_TEXT = 'Dracaufeu PV 120 Pokémon de base\nAttaque Feu Rotatif\nFaiblesse Eau x2 Retraite 3\nIllus. Mitsuhiro Arita 4/102';
@@ -297,6 +304,10 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(parseCardText('PV 90 12/20 ... 058 / 102').number, '58', 'le dernier numéro lu (bas de carte) gagne');
     assert.equal(parseCardText('Résistance Illus. Jean').lang, 'unknown', 'mots identiques FR/EN ignorés');
     assert.equal(parseCardText('').number, '');
+    const it = parseCardText('Haunter 50 PV debolezza resistenza costo di ritirata Fase 1 Evolve da Gastly 21/62');
+    assert.deepEqual([it.lang, it.strong], ['other', true], 'italien : PV et résistance ne comptent pas comme français');
+    assert.equal(parseCardText('몸통박치기 진검승부 몸통박치기').lang, 'other', 'coréen');
+    assert.equal(parseCardText('PV 50 Pokémon').lang, 'unknown', 'PV seul : ambigu');
   });
 
   test('Scan sans IA : texte OCR → carte, prix, annonce FR ; état modifiable', async () => {
@@ -328,42 +339,42 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal((await core.api('/api/scan', 'POST', { number: '7/99', name: 'Truc' })).market.trend, 30);
   });
 
-  test('Langue des annonces : OCR de la photo gratuit, IA seulement en dernier recours', async () => {
-    const saved = vintedItems.slice();
-    vintedItems.length = 0;
-    const mkItem = (id, title, photo) => ({ id, title, price: { amount: '5.0' }, photo: { url: photo }, user: { login: 'u' + id } });
-    vintedItems.push(mkItem(51, 'Carte neuve 4/102', 'http://x/en/51.jpg'));    // OCR : anglais
-    vintedItems.push(mkItem(52, 'Carte neuve 58/102', 'http://x/fr/52.jpg'));   // OCR : français
-    vintedItems.push(mkItem(53, 'Carte neuve 4/102 bis', 'http://x/blur/53.jpg')); // OCR illisible
-    const ocrCalls = [];
-    const ocr = async (url) => { ocrCalls.push(url); if (url.includes('/en/')) return EN_TEXT; if (url.includes('/fr/')) return FR_TEXT; if (url.includes('/boom/')) throw new Error('x'); return 'flou'; };
-    try {
+  test('Langue des annonces : OCR de la photo gratuit (FR, EN, italien, coréen), IA en dernier recours', async () => {
+    const IT_TEXT = 'Haunter 50 PV Pokemon gassoso\nPotere Pokémon Trasparenza\ndebolezza resistenza costo di ritirata\nFase 1 Evolve da Gastly';
+    const KO_TEXT = 'NAME\n' + '몸통박치기 진검승부 '.repeat(3);
+    await withItems([
+      [51, 'Carte neuve 4/102', 'http://x/en/51.jpg'],
+      [52, 'Carte neuve 58/102', 'http://x/fr/52.jpg'],
+      [53, 'Carte neuve 4/102 bis', 'http://x/blur/53.jpg'],
+      [54, 'Haunter 21/62', 'http://x/it/54.jpg'],
+      [55, 'Cufant AR 073/064', 'http://x/ko/55.jpg'],
+    ], async () => {
+      const ocrCalls = [];
+      const ocr = async (url) => { ocrCalls.push(url); if (url.includes('/en/')) return EN_TEXT; if (url.includes('/fr/')) return FR_TEXT; if (url.includes('/it/')) return IT_TEXT; if (url.includes('/ko/')) return KO_TEXT; return 'flou'; };
       langCalls.length = 0;
       const core = mk({ ocr });
-      let j = await core.api('/api/recent?q=x');
-      let by = Object.fromEntries(j.items.map((i) => [i.id, i]));
-      assert.equal(by[51], undefined, 'anglaise lue sur la photo : masquée');
-      assert.equal(by[52].lang, 'fr'); assert.equal(by[52].langSrc, 'ocr');
-      assert.equal(by[53].lang, 'unknown');
+      const j = await settle(core);
+      assert.deepEqual(j.items.map((i) => i.id), [52], 'strict : seule la carte lue en français reste');
+      assert.equal(j.items[0].langSrc, 'ocr');
+      assert.equal(j.hidden.other, 3, 'anglais, italien et coréen détectés');
+      assert.equal(j.hidden.unverified, 1, 'photo illisible : non confirmée');
       assert.equal(langCalls.length, 0, 'sans clé : aucun appel IA');
       const n = ocrCalls.length;
-      await core.api('/api/recent?q=x');
+      await settle(core);
       assert.equal(ocrCalls.length, n, 'résultat OCR mis en cache');
       // avec clé + option : l'IA ne voit que ce que l'OCR n'a pas su lire
       langCalls.length = 0;
       const core2 = mk({ ocr });
       await core2.api('/api/settings', 'POST', { anthropicKey: 'sk-test', langCheck: true });
-      j = await core2.api('/api/recent?q=x');
+      await settle(core2);
       assert.deepEqual(langCalls.map((c) => c.url), ['http://x/blur/53.jpg']);
-      // OCR en erreur : l'appli continue
-      vintedItems.length = 0;
-      vintedItems.push(mkItem(54, 'Carte neuve 4/102', 'http://x/boom/54.jpg'));
-      j = await mk({ ocr }).api('/api/recent?q=x');
-      assert.equal(j.items.length, 1);
-    } finally {
-      vintedItems.length = 0;
-      vintedItems.push(...saved);
-    }
+    });
+    // OCR en erreur : l'appli continue
+    await withItems([[56, 'Carte neuve 4/102', 'http://x/boom/56.jpg']], async () => {
+      const core = mk({ ocr: async () => { throw new Error('x'); } });
+      await core.api('/api/settings', 'POST', { frMode: 'loose' });
+      assert.equal((await settle(core)).items.length, 1);
+    });
   });
 
   test('Chemin natif Android : cookies en chaîne jointe, jeton lu depuis set-cookie', async () => {
