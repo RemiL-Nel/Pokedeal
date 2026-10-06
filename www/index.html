@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#14161c">
+<title>PokéDeals</title>
+<style>
+:root{
+  --bg:#14161c;--card:#1d2029;--line:#2b2f3b;--txt:#eef0f5;--mut:#8b91a3;
+  --acc:#ffcb05;--acc2:#3b6cf4;--ok:#35c27a;--bad:#ff5b5b;--warn:#ff9f43;
+  --sat:max(env(safe-area-inset-top,0px),var(--safe-area-inset-top,0px));
+  --sab:max(env(safe-area-inset-bottom,0px),var(--safe-area-inset-bottom,0px));
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,-apple-system,Roboto,sans-serif}
+body{padding-bottom:calc(64px + var(--sab))}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(10px + var(--sat)) 14px 10px;border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:18px;display:flex;align-items:center;gap:8px}
+h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}
+h1 .dot.live{background:var(--ok);box-shadow:0 0 0 0 rgba(53,194,122,.6);animation:pulse 2s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(53,194,122,0)}100%{box-shadow:0 0 0 0 rgba(53,194,122,0)}}
+.sub{color:var(--mut);font-size:12px;margin-top:2px}
+#budget{display:none;margin-top:8px}
+#budTxt{font-size:12px;color:var(--mut)}
+.track{height:5px;background:var(--card);border-radius:3px;margin-top:4px;overflow:hidden}
+.bar{height:100%;background:var(--ok);width:0}.bar.warn{background:var(--warn)}.bar.over{background:var(--bad)}
+.filters{display:flex;gap:8px;margin-top:10px}
+input,select,button,textarea{font:inherit;color:var(--txt)}
+.filters input{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 11px;min-width:0}
+#q{flex:1}
+#max{width:84px}
+.row{display:flex;gap:8px;align-items:center;margin-top:8px;color:var(--mut);font-size:13px;flex-wrap:wrap}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:5px 11px;cursor:pointer;user-select:none}
+.chip.on{border-color:var(--acc);color:var(--acc)}
+main{padding:12px}
+.tab{display:none}.tab.active{display:block}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.item.new{border-color:var(--acc);animation:flash 1.6s ease-out}
+.item.top{border-color:var(--ok)}
+@keyframes flash{from{box-shadow:0 0 0 3px rgba(255,203,5,.55)}to{box-shadow:none}}
+.pic{display:block;position:relative}
+.item img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:#0e1015}
+.badge{position:absolute;top:8px;left:8px;background:var(--acc);color:#111;font-weight:700;font-size:11px;padding:3px 7px;border-radius:6px}
+.age{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.65);font-size:11px;padding:3px 7px;border-radius:6px}
+.meta{padding:8px 10px 10px;display:flex;flex-direction:column;gap:2px;flex:1}
+.price{font-size:18px;font-weight:800;color:var(--acc)}
+.price small{font-size:11px;font-weight:500;color:var(--mut);margin-left:4px}
+.ttl{font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sm{font-size:11px;color:var(--mut)}
+.deal{font-size:12px;font-weight:700;border-radius:6px;padding:3px 7px;margin-top:3px}
+.deal.top{background:rgba(53,194,122,.16);color:var(--ok)}
+.deal.good{background:rgba(255,203,5,.14);color:var(--acc)}
+.over-tag{font-size:11px;color:var(--bad);font-weight:700}
+.btns2{display:flex;gap:6px;margin-top:auto;padding-top:8px}
+.btns2 .buy,.btns2 .add{flex:1;text-align:center;text-decoration:none;border-radius:8px;padding:9px 4px;font-weight:700;font-size:13px;border:0}
+.buy{background:var(--acc);color:#111}
+.add{background:var(--bg);color:var(--txt);border:1px solid var(--line)!important}
+.empty,.err{text-align:center;padding:30px 10px;color:var(--mut)}
+.err{color:var(--bad)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:rgba(16,18,23,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding-bottom:var(--sab)}
+nav button{flex:1;background:none;border:0;padding:13px 0;color:var(--mut);font-weight:600;font-size:14px}
+nav button.on{color:var(--acc)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:12px}
+.panel h3{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+.kv:last-child{border:0}.kv span:first-child{color:var(--mut)}
+label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+.field{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+textarea.field{min-height:150px;resize:vertical}
+.btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btn{flex:1;min-width:120px;background:var(--acc);color:#111;border:0;border-radius:10px;padding:12px;font-weight:700}
+.btn.sec{background:var(--bg);color:var(--txt);border:1px solid var(--line)}
+.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:var(--card);border:2px dashed var(--line);border-radius:14px;padding:28px 14px;text-align:center;cursor:pointer}
+.drop b{font-size:16px}.drop span{color:var(--mut);font-size:13px}
+#preview{width:100%;max-height:340px;object-fit:contain;border-radius:12px;background:#0e1015;display:none;margin:12px 0 0}
+.spin{display:none;text-align:center;padding:24px;color:var(--mut)}
+.note{font-size:12px;color:var(--mut);margin-top:8px}
+.warnbox{background:rgba(255,159,67,.12);border:1px solid var(--warn);color:var(--warn);border-radius:10px;padding:9px 11px;font-size:13px;margin-bottom:10px}
+a.link{color:var(--acc2)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.stat span{display:block;color:var(--mut);font-size:12px}
+.stat b{font-size:18px}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+.inv{display:flex;gap:8px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.inv:last-child{border:0}
+.inv .l{flex:1;min-width:0}
+.inv .n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inv button{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px}
+.two{display:flex;gap:8px}.two .field{flex:1}
+.check{display:flex;align-items:center;gap:8px;margin:10px 0 0;color:var(--txt);font-size:14px}
+.check input{width:18px;height:18px}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + var(--sab));background:#000c;border:1px solid var(--line);padding:9px 14px;border-radius:999px;font-size:13px;display:none;z-index:20}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PokéDeals <span class="dot" id="dot"></span></h1>
+  <div class="sub" id="sub">Chargement…</div>
+  <div id="budget"><div id="budTxt"></div><div class="track"><div id="budBar" class="bar"></div></div></div>
+  <div class="filters" id="filters">
+    <input id="q" type="search" placeholder="Mots-clés, séparés par |" value="carte pokemon">
+    <input id="max" type="number" inputmode="decimal" placeholder="Max €">
+  </div>
+  <div class="row" id="chips">
+    <span class="chip on" id="chipLive">Auto</span>
+    <span class="chip" id="chipSound">Son : off</span>
+    <span class="chip" id="chipOnlyNew">Nouvelles</span>
+    <span class="chip" id="chipDeals">Bonnes affaires</span>
+    <span class="chip" id="chipVariants">+ variantes</span>
+  </div>
+</header>
+
+<main>
+  <!-- RÉCENT -->
+  <section class="tab active" id="tab-recent">
+    <div id="keyWarn" class="warnbox" style="display:none">Pour les scores de bonne affaire, ajoute ta clé Anthropic dans Stock › Réglages. Sans elle, tu vois seulement la liste des annonces.</div>
+    <div id="err" class="err" style="display:none"></div>
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty" style="display:none">Aucune annonce pour l'instant.</div>
+  </section>
+
+  <!-- VENDRE -->
+  <section class="tab" id="tab-sell">
+    <div class="warnbox" id="sellNote" style="display:none">Ajoute ta clé Anthropic dans Stock › Réglages pour identifier les cartes.</div>
+    <label class="drop" for="file">
+      <b>Prendre la carte en photo</b>
+      <span>L'IA identifie la carte, estime le prix et rédige l'annonce.</span>
+    </label>
+    <input id="file" type="file" accept="image/*" capture="environment" hidden>
+    <img id="preview" alt="">
+    <div class="spin" id="spin">Analyse de la carte…</div>
+    <div id="sellErr" class="err" style="display:none"></div>
+    <div id="result" style="display:none">
+      <div class="panel"><h3>Carte détectée</h3><div id="cardInfo"></div></div>
+      <div class="panel"><h3>Prix du marché (Cardmarket)</h3><div id="marketInfo"></div></div>
+      <div class="panel">
+        <h3>Annonce Vinted</h3>
+        <label for="lTitle">Titre</label><input id="lTitle" class="field">
+        <label for="lPrice">Prix (€)</label><input id="lPrice" class="field" type="number" inputmode="decimal" step="0.1">
+        <label for="lDesc">Description</label><textarea id="lDesc" class="field"></textarea>
+        <div class="btns">
+          <button class="btn sec" id="cpTitle">Copier titre</button>
+          <button class="btn sec" id="cpDesc">Copier description</button>
+          <button class="btn" id="shareBtn">Envoyer vers Vinted</button>
+        </div>
+        <div class="note">« Envoyer vers Vinted » ouvre le partage Android avec la photo : choisis Vinted, colle le titre et la description (déjà copiés), valide.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STOCK -->
+  <section class="tab" id="tab-stock">
+    <div class="stats">
+      <div class="stat"><span>Investi</span><b id="stInv">—</b></div>
+      <div class="stat"><span>Revenu net</span><b id="stRev">—</b></div>
+      <div class="stat"><span>Bénéfice réalisé</span><b id="stProfit">—</b></div>
+      <div class="stat"><span>En stock (coût)</span><b id="stStock">—</b></div>
+    </div>
+
+    <div class="panel">
+      <h3>Budget mensuel</h3>
+      <div class="two"><input id="budIn" class="field" type="number" inputmode="decimal" placeholder="0 = pas de budget"><button class="btn" id="budSave" style="flex:0 0 auto;min-width:0">OK</button></div>
+      <div class="note" id="budInfo"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Mon stock</h3>
+      <div id="invList"></div>
+      <div id="invEmpty" class="note">Rien pour l'instant. Utilise « J'ai acheté » sur une annonce, ou ajoute à la main :</div>
+      <div class="two" style="margin-top:10px"><input id="mName" class="field" placeholder="Carte"><input id="mPrice" class="field" type="number" inputmode="decimal" placeholder="Prix €" style="max-width:96px"></div>
+      <div class="btns"><button class="btn sec" id="mAdd">Ajouter</button></div>
+    </div>
+
+    <div class="panel">
+      <h3>Alertes</h3>
+      <div class="note" id="wNote">Le téléphone vérifie Vinted et te notifie des nouvelles annonces. Ça ne fonctionne que tant que l'appli reste ouverte ou vient d'être mise en arrière-plan : Android coupe les applis inactives.</div>
+      <label class="check"><input type="checkbox" id="wOn"> Surveiller les nouvelles annonces</label>
+      <label for="wQ">Mots-clés (séparés par |)</label><input id="wQ" class="field">
+      <div class="two">
+        <div style="flex:1"><label for="wMax">Prix max (€)</label><input id="wMax" class="field" type="number" inputmode="decimal"></div>
+        <div style="flex:1"><label for="wInt">Toutes les (s)</label><input id="wInt" class="field" type="number" inputmode="numeric"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="wDeals"> Seulement les bonnes affaires</label>
+      <div class="btns"><button class="btn" id="wSave">Enregistrer</button><button class="btn sec" id="wTest">Notification test</button></div>
+      <div class="note" id="wStatus"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Réglages</h3>
+      <label for="sKey">Clé API Anthropic <span id="sKeyState"></span></label>
+      <input id="sKey" class="field" type="password" autocomplete="off" placeholder="sk-ant-…">
+      <div class="two">
+        <div style="flex:1"><label for="sShip">Port moyen à l'achat (€)</label><input id="sShip" class="field" type="number" inputmode="decimal" step="0.1"></div>
+        <div style="flex:1"><label for="sFee">Commission revente (%)</label><input id="sFee" class="field" type="number" inputmode="decimal" step="0.5"></div>
+      </div>
+      <label for="sTg">Telegram (optionnel) : token du bot <span id="sTgState"></span></label>
+      <input id="sTg" class="field" type="password" autocomplete="off">
+      <label for="sChat">Telegram : chat id</label>
+      <input id="sChat" class="field" inputmode="numeric" autocomplete="off">
+      <label for="sTcg">Clé pokemontcg.io (optionnel) <span id="sTcgState"></span></label>
+      <input id="sTcg" class="field" type="password" autocomplete="off">
+      <div class="btns"><button class="btn" id="sSave">Enregistrer</button><button class="btn sec" id="sClear">Effacer mes clés</button></div>
+      <div class="note">Les clés restent uniquement sur ce téléphone et ne sont envoyées qu'à Anthropic, pokemontcg.io et Telegram.</div>
+      <div class="btns"><button class="btn sec" id="exBtn">Exporter mes données</button><button class="btn sec" id="imBtn">Importer</button></div>
+      <input type="file" id="imFile" accept="application/json,.json" hidden>
+      <div class="note">À faire avant de désinstaller ou de remplacer l'appli : stock et budget sont stockés sur le téléphone.</div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<nav>
+  <button id="navRecent" class="on">Récent</button>
+  <button id="navSell">Vendre</button>
+  <button id="navStock">Stock</button>
+</nav>
+
+<script src="js/core.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const tag = (name, cls, text) => { const e = document.createElement(name); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const safeUrl = (u) => /^https?:\/\//.test(u || '') ? u : '#';
+const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('fr-FR', {minimumFractionDigits: 0, maximumFractionDigits: 2}) + ' €';
+const sgn = (n) => (n >= 0 ? '+' : '−') + fmt(Math.abs(n));
+const VARIANTS = 'carte pokemon | cartes pokémon | pokemone | classeur pokemon | collection pokemon';
+const CAP = window.Capacitor;
+const plug = (name) => (CAP && CAP.Plugins && CAP.Plugins[name]) || null;
+
+/* ---------- Notifications locales ---------- */
+async function ensureNotifyPermission(){
+  const ln = plug('LocalNotifications');
+  if (ln) {
+    let s = await ln.checkPermissions();
+    if (s.display !== 'granted') s = await ln.requestPermissions();
+    return s.display === 'granted';
+  }
+  if ('Notification' in window) return (await Notification.requestPermission()) === 'granted';
+  return true;
+}
+let notifId = Math.floor(Math.random() * 1e6);
+async function notify({title, body, url}){
+  const ln = plug('LocalNotifications');
+  if (ln) { await ln.schedule({notifications: [{id: ++notifId, title, body, channelId: 'deals', extra: {url}}]}); return; }
+  if ('Notification' in window && Notification.permission === 'granted') new Notification(title, {body});
+}
+(function initNotifications(){
+  const ln = plug('LocalNotifications'); if (!ln) return;
+  ln.createChannel({id: 'deals', name: 'Bonnes affaires', description: 'Alertes PokéDeals', importance: 4, visibility: 1, vibration: true}).catch(() => {});
+  ln.addListener('localNotificationActionPerformed', (e) => {
+    const u = e && e.notification && e.notification.extra && e.notification.extra.url;
+    if (u && /^https?:\/\//.test(u)) window.open(u, '_blank');
+  });
+})();
+
+/* ---------- Moteur local ---------- */
+const core = PDCore.createCore({
+  request: PDCore.makeRequest(window),
+  storage: window.localStorage,
+  notify,
+  ensureNotifyPermission,
+});
+const api = (path, method = 'GET', body) => core.api(path, method, body);
+
+let toastT;
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 2200); }
+
+let app = {watch: {}, watchStatus: {}, budget: {}, inventory: [], stats: null, config: {}, settings: {}};
+let live = true, sound = false, onlyNew = false, onlyDeals = false;
+let seen = new Set(), newIds = new Set(), firstLoad = true, items = [], timer = null, lastDataUrl = null, curTab = 'recent';
+
+/* ---------- Onglets ---------- */
+function showTab(name){
+  curTab = name;
+  for (const t of ['recent', 'sell', 'stock']) {
+    $('#tab-' + t).classList.toggle('active', t === name);
+    $('#nav' + t[0].toUpperCase() + t.slice(1)).classList.toggle('on', t === name);
+  }
+  $('#filters').style.display = $('#chips').style.display = name === 'recent' ? '' : 'none';
+  if (name === 'stock') loadState();
+}
+$('#navRecent').onclick = () => showTab('recent');
+$('#navSell').onclick = () => showTab('sell');
+$('#navStock').onclick = () => showTab('stock');
+
+/* ---------- État (stock, budget, alertes, réglages) ---------- */
+async function loadState(){
+  try{
+    app = await api('/api/state');
+    renderBudget(); renderStock(); renderWatch(); renderSettings();
+    $('#keyWarn').style.display = app.config.canScore ? 'none' : 'block';
+    $('#sellNote').style.display = app.config.canIdentify ? 'none' : 'block';
+    render();
+  }catch(e){ /* l'onglet Récent affichera l'erreur */ }
+}
+function renderBudget(){
+  const s = app.stats, box = $('#budget');
+  if (!s || !s.monthly) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  const pct = Math.min(100, Math.round(s.spentMonth / s.monthly * 100));
+  $('#budTxt').textContent = `Budget du mois : reste ${fmt(Math.max(0, s.remaining))} sur ${fmt(s.monthly)}` + (s.remaining < 0 ? ` (dépassé de ${fmt(-s.remaining)})` : '');
+  $('#budBar').style.width = pct + '%';
+  $('#budBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
+}
+
+/* ---------- Récent ---------- */
+const queries = () => $('#q').value.split('|').map(s => s.trim()).filter(Boolean);
+function ago(ts){
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "à l'instant";
+  if (s < 3600) return Math.round(s / 60) + ' min';
+  if (s < 86400) return Math.round(s / 3600) + ' h';
+  return Math.round(s / 86400) + ' j';
+}
+
+function itemEl(it){
+  const d = it.deal, isNew = newIds.has(it.id);
+  const remaining = app.stats ? app.stats.remaining : null;
+  const cost = it.totalPrice != null ? it.totalPrice : it.price;
+  const over = remaining != null && cost != null && cost > remaining;
+  const box = tag('div', 'item' + (isNew ? ' new' : '') + (d && d.level === 'top' ? ' top' : ''));
+  const pic = tag('a', 'pic'); pic.href = safeUrl(it.url); pic.target = '_blank'; pic.rel = 'noopener';
+  const img = new Image(); img.loading = 'lazy'; img.alt = ''; if (safeUrl(it.photo) !== '#') img.src = it.photo;
+  pic.appendChild(img);
+  if (isNew) pic.appendChild(tag('span', 'badge', 'NOUVEAU'));
+  if (it.ts) pic.appendChild(tag('span', 'age', ago(it.ts)));
+  box.appendChild(pic);
+
+  const meta = tag('div', 'meta');
+  const price = tag('div', 'price', fmt(it.price));
+  if (it.totalPrice) price.appendChild(tag('small', '', fmt(it.totalPrice) + ' avec frais'));
+  meta.appendChild(price);
+  meta.appendChild(tag('div', 'ttl', it.title));
+  if (d && d.level !== 'none') {
+    meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
+    meta.appendChild(tag('div', 'sm', (it.analysis ? (it.analysis.name + ' ' + it.analysis.number).trim() + ' · ' : '') + 'estimation, vérifie la carte'));
+  } else if (d) {
+    meta.appendChild(tag('div', 'sm', 'Marché ~' + fmt(d.market) + ' · marge ' + sgn(d.margin)));
+  } else {
+    meta.appendChild(tag('div', 'sm', [it.status, it.seller].filter(Boolean).join(' · ')));
+  }
+  if (over) meta.appendChild(tag('div', 'over-tag', 'Hors budget'));
+
+  const row = tag('div', 'btns2');
+  const buy = tag('a', 'buy', 'Acheter ↗'); buy.href = safeUrl(it.url); buy.target = '_blank'; buy.rel = 'noopener';
+  buy.addEventListener('click', e => {
+    if (over && !confirm(`Cet achat (${fmt(cost)}) dépasse ton budget restant (${fmt(remaining)}). Ouvrir quand même ?`)) e.preventDefault();
+  });
+  const add = tag('button', 'add', "J'ai acheté");
+  add.addEventListener('click', () => logPurchase(it));
+  row.append(buy, add);
+  meta.appendChild(row);
+  box.appendChild(meta);
+  return box;
+}
+
+function render(){
+  let list = items;
+  if (onlyNew) list = list.filter(i => newIds.has(i.id));
+  if (onlyDeals) list = list.filter(i => i.deal && i.deal.level !== 'none').sort((a, b) => b.deal.margin - a.deal.margin);
+  $('#grid').replaceChildren(...list.map(itemEl));
+  $('#empty').style.display = list.length ? 'none' : 'block';
+}
+
+function beep(){
+  try{
+    const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+    o.frequency.value = 880; g.gain.value = .08; o.connect(g); g.connect(c.destination); o.start();
+    setTimeout(() => { o.stop(); c.close(); }, 160);
+  }catch{}
+}
+
+let loading = false;
+async function load(){
+  const qs = queries(); if (!qs.length || loading) return;
+  loading = true;
+  const p = new URLSearchParams({q: qs.join('|')});
+  if ($('#max').value) p.set('max', $('#max').value);
+  try{
+    const j = await api('/api/recent?' + p);
+    $('#err').style.display = 'none'; $('#dot').classList.add('live');
+    let fresh = 0;
+    for (const it of j.items) if (!seen.has(it.id)) { seen.add(it.id); if (!firstLoad) { newIds.add(it.id); fresh++; } }
+    items = j.items; firstLoad = false;
+    render();
+    if (fresh) { if (sound) beep(); if (navigator.vibrate) navigator.vibrate(120); }
+    const deals = items.filter(i => i.deal && i.deal.level !== 'none').length;
+    $('#sub').textContent = `${items.length} annonces` + (j.scoring ? ` · ${deals} bonne(s) affaire(s)` : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}` + (j.aiError ? ' · scoring indisponible' : '');
+  }catch(e){
+    $('#dot').classList.remove('live'); $('#err').style.display = 'block'; $('#err').textContent = 'Erreur : ' + e.message;
+  }finally{ loading = false; }
+}
+function schedule(){
+  clearInterval(timer);
+  if (live) timer = setInterval(() => { if (!document.hidden && curTab === 'recent') load(); }, Math.max(30, 15 * queries().length) * 1000);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && curTab === 'recent') load(); });
+
+$('#chipLive').onclick = e => { live = !live; e.target.classList.toggle('on', live); schedule(); };
+$('#chipSound').onclick = e => { sound = !sound; e.target.classList.toggle('on', sound); e.target.textContent = 'Son : ' + (sound ? 'on' : 'off'); if (sound) beep(); };
+$('#chipOnlyNew').onclick = e => { onlyNew = !onlyNew; e.target.classList.toggle('on', onlyNew); render(); };
+$('#chipDeals').onclick = e => { onlyDeals = !onlyDeals; e.target.classList.toggle('on', onlyDeals); render(); };
+$('#chipVariants').onclick = () => { $('#q').value = VARIANTS; refilter(); };
+let deb; function refilter(){ clearTimeout(deb); deb = setTimeout(() => { firstLoad = true; seen.clear(); newIds.clear(); load(); schedule(); }, 600); }
+$('#q').addEventListener('input', refilter);
+$('#max').addEventListener('input', refilter);
+
+/* ---------- Achat : ouverture de Vinted + journal ---------- */
+async function logPurchase(it){
+  const def = it.totalPrice != null ? it.totalPrice : it.price;
+  const v = prompt('Prix payé en € (port inclus) ?', def == null ? '' : String(def).replace('.', ','));
+  if (v === null) return;
+  const price = parseFloat(v.replace(',', '.'));
+  if (!Number.isFinite(price) || price < 0) { alert('Prix invalide'); return; }
+  try{
+    const name = (it.analysis ? `${it.analysis.name} ${it.analysis.number}`.trim() : it.title).slice(0, 120);
+    const j = await api('/api/inventory', 'POST', {name, buyPrice: price, buyShip: 0, url: it.url, marketAtBuy: it.deal ? it.deal.market : null});
+    app.inventory.unshift(j.item); app.stats = j.stats;
+    renderBudget(); renderStock(); render(); toast('Ajouté au stock ✓');
+  }catch(e){ alert('Erreur : ' + e.message); }
+}
+
+/* ---------- Stock ---------- */
+function renderStock(){
+  const s = app.stats; if (!s) return;
+  $('#stInv').textContent = fmt(s.invested);
+  $('#stRev').textContent = fmt(s.revenue);
+  const sp = $('#stProfit'); sp.textContent = sgn(s.profit); sp.className = s.profit >= 0 ? 'pos' : 'neg';
+  $('#stStock').textContent = fmt(s.stockCost);
+  $('#budIn').value = s.monthly || '';
+  $('#budInfo').textContent = s.monthly ? `Dépensé ce mois-ci : ${fmt(s.spentMonth)}` : 'Fixe un montant pour être prévenu avant de le dépasser.';
+  const list = $('#invList'); list.replaceChildren();
+  for (const it of app.inventory) {
+    const cost = (it.buyPrice || 0) + (it.buyShip || 0);
+    const row = tag('div', 'inv'), l = tag('div', 'l');
+    l.appendChild(tag('div', 'n', it.name));
+    let sub = 'acheté ' + fmt(cost);
+    if (it.status === 'sold') { const pr = (it.sellPrice || 0) - (it.sellFees || 0) - cost; sub += ` · vendu ${fmt(it.sellPrice)} · ${sgn(pr)}`; }
+    else if (it.marketAtBuy) sub += ` · marché ~${fmt(it.marketAtBuy)}`;
+    l.appendChild(tag('div', 'sm', sub));
+    row.appendChild(l);
+    if (it.status !== 'sold') { const b = tag('button', '', 'Vendu'); b.onclick = () => sellItem(it); row.appendChild(b); }
+    const x = tag('button', '', '✕'); x.onclick = () => delItem(it); row.appendChild(x);
+    list.appendChild(row);
+  }
+  $('#invEmpty').style.display = app.inventory.length ? 'none' : 'block';
+}
+async function sellItem(it){
+  const v = prompt('Prix de vente en € ?'); if (v === null) return;
+  const price = parseFloat(v.replace(',', '.')); if (!Number.isFinite(price) || price < 0) { alert('Prix invalide'); return; }
+  const f = prompt('Frais à ta charge (commission, port…) en € ?', '0'); if (f === null) return;
+  const fees = parseFloat((f || '0').replace(',', '.')) || 0;
+  try{ const j = await api('/api/inventory/' + it.id, 'POST', {status: 'sold', sellPrice: price, sellFees: fees}); Object.assign(it, j.item); app.stats = j.stats; renderStock(); renderBudget(); }catch(e){ alert('Erreur : ' + e.message); }
+}
+async function delItem(it){
+  if (!confirm(`Supprimer « ${it.name} » du stock ?`)) return;
+  try{ const j = await api('/api/inventory/' + it.id, 'DELETE'); app.inventory = app.inventory.filter(x => x.id !== it.id); app.stats = j.stats; renderStock(); renderBudget(); render(); }catch(e){ alert('Erreur : ' + e.message); }
+}
+$('#mAdd').onclick = async () => {
+  const name = $('#mName').value.trim(), price = parseFloat($('#mPrice').value);
+  if (!name || !Number.isFinite(price)) { toast('Nom et prix requis'); return; }
+  try{ const j = await api('/api/inventory', 'POST', {name, buyPrice: price}); app.inventory.unshift(j.item); app.stats = j.stats; $('#mName').value = $('#mPrice').value = ''; renderStock(); renderBudget(); render(); }catch(e){ alert('Erreur : ' + e.message); }
+};
+$('#budSave').onclick = async () => {
+  try{ const j = await api('/api/budget', 'POST', {monthly: $('#budIn').value || 0}); app.stats = j.stats; renderBudget(); renderStock(); render(); toast('Budget enregistré'); }catch(e){ alert('Erreur : ' + e.message); }
+};
+
+/* ---------- Alertes ---------- */
+function renderWatch(){
+  const w = app.watch || {};
+  $('#wOn').checked = !!w.enabled;
+  $('#wQ').value = (w.queries || []).join(' | ');
+  $('#wMax').value = w.maxPrice || ''; $('#wInt').value = w.intervalSec || 60;
+  $('#wDeals').checked = w.onlyDeals !== false;
+  const st = app.watchStatus || {};
+  $('#wStatus').textContent = st.running ? `Actif · ${st.sent || 0} alerte(s)` + (st.lastRun ? ` · dernier passage ${new Date(st.lastRun).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'})}` : '') + (st.lastError ? ` · erreur : ${st.lastError}` : '') : 'Inactif';
+}
+$('#wSave').onclick = async () => {
+  try{
+    await api('/api/watch', 'POST', {enabled: $('#wOn').checked, queries: $('#wQ').value.split('|').map(s => s.trim()).filter(Boolean), maxPrice: $('#wMax').value || null, onlyDeals: $('#wDeals').checked, intervalSec: Number($('#wInt').value) || 60});
+    await loadState(); toast('Enregistré');
+  }catch(e){ alert('Erreur : ' + e.message); await loadState(); }
+};
+$('#wTest').onclick = async () => {
+  try{ if (!(await ensureNotifyPermission())) { alert('Autorise les notifications pour PokéDeals dans les réglages Android.'); return; } await api('/api/watch/test', 'POST', {}); toast('Notification envoyée'); }catch(e){ alert('Erreur : ' + e.message); }
+};
+
+/* ---------- Réglages ---------- */
+function renderSettings(){
+  const s = app.settings || {};
+  $('#sKeyState').textContent = s.hasAnthropicKey ? '(enregistrée ✓)' : '(manquante)';
+  $('#sTgState').textContent = s.hasTelegram ? '(configuré ✓)' : '';
+  $('#sTcgState').textContent = s.hasTcgKey ? '(enregistrée ✓)' : '';
+  $('#sShip').value = s.shipIn ?? 3;
+  $('#sFee').value = s.feeOut != null ? Math.round(s.feeOut * 1000) / 10 : 5;
+}
+$('#sSave').onclick = async () => {
+  const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100};
+  for (const [id, k] of [['#sKey', 'anthropicKey'], ['#sTg', 'tgToken'], ['#sChat', 'tgChat'], ['#sTcg', 'tcgKey']]) if ($(id).value.trim()) b[k] = $(id).value.trim();
+  try{
+    await api('/api/settings', 'POST', b);
+    for (const id of ['#sKey', '#sTg', '#sChat', '#sTcg']) $(id).value = '';
+    await loadState(); toast('Réglages enregistrés'); firstLoad = true; seen.clear(); newIds.clear(); load();
+  }catch(e){ alert('Erreur : ' + e.message); }
+};
+$('#sClear').onclick = async () => {
+  if (!confirm('Effacer la clé Anthropic, Telegram et pokemontcg.io de ce téléphone ?')) return;
+  await api('/api/settings', 'POST', {clear: ['anthropicKey', 'tgToken', 'tgChat', 'tcgKey']}); await loadState(); toast('Clés effacées');
+};
+
+/* ---------- Export / import des données ---------- */
+async function shareFileText(name, text, title){
+  const FS = plug('Filesystem'), SH = plug('Share');
+  if (FS && SH) {
+    const w = await FS.writeFile({path: name, data: text, directory: 'CACHE', encoding: 'utf8'});
+    await SH.share({title, files: [w.uri], dialogTitle: title});
+    return;
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type: 'application/json'})); a.download = name; a.click();
+}
+$('#exBtn').onclick = async () => {
+  try{ const d = await api('/api/export'); await shareFileText('pokedeals-sauvegarde.json', JSON.stringify(d, null, 2), 'Sauvegarde PokéDeals'); }
+  catch(e){ if (!/cancel/i.test(e.message || '')) alert('Erreur : ' + e.message); }
+};
+$('#imBtn').onclick = () => $('#imFile').click();
+$('#imFile').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try{
+    const obj = JSON.parse(await f.text());
+    if (!confirm('Remplacer ton stock et ton budget actuels par ceux du fichier ?')) return;
+    const j = await api('/api/import', 'POST', obj);
+    await loadState(); toast(`${j.imported} carte(s) importée(s)`);
+  }catch(err){ alert('Import impossible : ' + err.message); }
+  finally{ e.target.value = ''; }
+});
+
+/* ---------- Vendre ---------- */
+function shrink(file, maxSide = 1280){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve({dataUrl: c.toDataURL('image/jpeg', .85)});
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => reject(new Error('Image illisible'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+function fillKv(el, rows){
+  el.replaceChildren();
+  for (const [k, v] of rows) {
+    if (!v && v !== 0) continue;
+    const d = tag('div', 'kv'); d.append(tag('span', '', k), tag('span', '', v)); el.appendChild(d);
+  }
+}
+$('#file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#sellErr').style.display = 'none'; $('#result').style.display = 'none'; $('#spin').style.display = 'block';
+  try{
+    const {dataUrl} = await shrink(f);
+    lastDataUrl = dataUrl;
+    $('#preview').src = dataUrl; $('#preview').style.display = 'block';
+    const j = await api('/api/identify', 'POST', {image: dataUrl});
+    fillKv($('#cardInfo'), [['Nom', j.card.name_fr || j.card.name], ['Nom EN', j.card.name_fr ? j.card.name : ''], ['Extension', j.card.set], ['Numéro', j.card.number], ['Rareté', j.card.rarity], ['Langue', j.card.language], ['État estimé', j.card.condition], ['Défauts', j.card.condition_notes]]);
+    const mi = $('#marketInfo');
+    if (j.market) {
+      fillKv(mi, [['Correspondance', j.market.matched], ['Tendance', j.market.trend != null ? fmt(j.market.trend) : ''], ['Moyenne 30 j', j.market.avg30 != null ? fmt(j.market.avg30) : ''], ['Prix mini', j.market.low != null ? fmt(j.market.low) : '']]);
+      if (j.market.url) { const a = tag('a', 'link', 'Voir sur Cardmarket'); a.href = safeUrl(j.market.url); a.target = '_blank'; a.rel = 'noopener'; const d = tag('div', 'note'); d.appendChild(a); mi.appendChild(d); }
+    } else { mi.replaceChildren(tag('div', 'note', 'Prix introuvable automatiquement : vérifie sur Cardmarket avant de fixer le tien.')); }
+    $('#lTitle').value = j.listing.title; $('#lDesc').value = j.listing.description; $('#lPrice').value = j.listing.suggestedPrice ?? '';
+    $('#result').style.display = 'block';
+  }catch(err){
+    $('#sellErr').style.display = 'block'; $('#sellErr').textContent = 'Erreur : ' + err.message;
+  }finally{ $('#spin').style.display = 'none'; e.target.value = ''; }
+});
+async function copy(text, btn){
+  try{ await navigator.clipboard.writeText(text); const t = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => btn.textContent = t, 1200); }catch{ prompt('Copie ce texte :', text); }
+}
+$('#cpTitle').onclick = e => copy($('#lTitle').value, e.target);
+$('#cpDesc').onclick = e => copy($('#lDesc').value, e.target);
+$('#shareBtn').onclick = async () => {
+  const text = `${$('#lTitle').value}\n\n${$('#lDesc').value}`;
+  try{ await navigator.clipboard.writeText(text); }catch{}
+  const FS = plug('Filesystem'), SH = plug('Share');
+  if (FS && SH && lastDataUrl) {
+    try{
+      const w = await FS.writeFile({path: 'carte.jpg', data: lastDataUrl.split(',')[1], directory: 'CACHE'});
+      await SH.share({title: $('#lTitle').value, text, files: [w.uri], dialogTitle: 'Envoyer vers Vinted'});
+      return;
+    }catch(e){ if (/cancel/i.test(e.message || '')) return; }
+  }
+  alert("Le partage de la photo a échoué. Le texte est copié : enregistre la photo et ouvre Vinted.");
+};
+
+/* ---------- Démarrage ---------- */
+showTab('recent');
+loadState();
+load(); schedule();
+</script>
+</body>
+</html>

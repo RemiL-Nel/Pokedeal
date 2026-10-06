@@ -1,0 +1,81 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Tests de la logique embarquée
+        run: npm test
+
+      - name: Générer le projet Android
+        run: |
+          npx cap add android
+          node scripts/patch-android.js
+          npx cap sync android
+
+      - name: Installer la plateforme Android requise
+        run: |
+          SDK=$(grep -oP 'compileSdkVersion\s*=\s*\K[0-9]+' android/variables.gradle)
+          echo "compileSdk = $SDK"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-$SDK"
+
+      - name: Clé de signature (secret KEYSTORE_B64 si présent, sinon clé temporaire)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "Clé stable utilisée : l'APK pourra s'installer par-dessus l'ancien."
+          else
+            keytool -genkeypair -storetype JKS -keystore ~/.android/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=PokeDeals,O=Remi,C=FR"
+            echo "::warning::Pas de secret KEYSTORE_B64 : clé temporaire. Désinstalle l'ancienne version avant d'installer ce build (exporte tes données d'abord)."
+          fi
+
+      - name: Compiler l'APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Renommer l'APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk PokeDeals.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PokeDeals-apk
+          path: PokeDeals.apk
+
+      - name: Publier dans les Releases (téléchargement direct depuis le téléphone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" PokeDeals.apk \
+            --title "PokéDeals build ${{ github.run_number }}" \
+            --notes "APK de test (signature de type debug)." \
+            --latest
