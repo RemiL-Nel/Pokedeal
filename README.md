@@ -3,6 +3,7 @@
 Appli native (Capacitor) qui fait tout **dans le téléphone** : plus de serveur, plus rien à mettre sur Internet. Les requêtes vers Vinted partent directement de ton Pixel (IP mobile, pas d'IP de datacenter).
 
 - **Récent** : annonces Vinted récentes, avec score de bonne affaire /100 (marge estimée vs Cardmarket, calculée par formule, sans IA), bouton **Acheter ↗** (ouvre l'annonce dans l'appli Vinted) et **J'ai acheté** (journal + budget).
+- **Affaires** : toutes les annonces dont le score est d'au moins 1/100, triées par score (ou marge, ou dernières vues). Elles restent 24 h même quand elles sortent de la liste Récent (mention « plus dans les récents »), ou jusqu'à ce que tu les retires (✕). Une annonce dont le score retombe à 0 (prix de référence modifié, prix baissé…) disparaît de l'onglet.
 - **Vendre** : photo d'une carte, lue **sur le téléphone par OCR (Google ML Kit, gratuit, hors ligne, sans IA)** : numéro, nom, langue, puis prix Cardmarket, annonce prête, partage de la photo vers Vinted. Si le numéro n'est pas lu (reflets, flou), tu le tapes à la main.
 - **Stock** : achats, ventes, bénéfices, budget mensuel, alertes, réglages, sauvegarde.
 

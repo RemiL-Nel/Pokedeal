@@ -53,6 +53,7 @@ main{padding:12px}
 .deal.top{background:rgba(53,194,122,.16);color:var(--ok)}
 .deal.good{background:rgba(255,203,5,.14);color:var(--acc)}
 .deal.none{background:rgba(255,255,255,.06);color:var(--mut);font-weight:600}
+.rm{position:absolute;top:6px;right:6px;z-index:2;background:rgba(0,0,0,.6);color:#fff;border:0;border-radius:50%;width:28px;height:28px;font-size:15px;line-height:1}
 .refrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .ref{font-size:11px;font-weight:600;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:8px;padding:4px 7px;text-decoration:none;font-family:inherit}
 .over-tag{font-size:11px;color:var(--bad);font-weight:700}
@@ -125,6 +126,19 @@ a.link{color:var(--acc2)}
     <div id="err" class="err" style="display:none"></div>
     <div id="grid" class="grid"></div>
     <div id="empty" class="empty" style="display:none">Aucune annonce pour l'instant.</div>
+  </section>
+
+  <!-- AFFAIRES -->
+  <section class="tab" id="tab-deals">
+    <div class="row" id="dealsBar">
+      <span class="chip on" data-sort="score">Meilleur score</span>
+      <span class="chip" data-sort="margin">Plus grosse marge</span>
+      <span class="chip" data-sort="seen">Vues récemment</span>
+      <span class="chip" id="dealsClear">Tout retirer</span>
+    </div>
+    <div class="sm" id="dealsInfo" style="margin:6px 2px 10px"></div>
+    <div id="dealsGrid" class="grid"></div>
+    <div id="dealsEmpty" class="empty" style="display:none">Aucune affaire pour l'instant. Les annonces qui obtiennent un score d'au moins 1/100 apparaissent ici et y restent 24 h (ou jusqu'à ce que tu les retires).</div>
   </section>
 
   <!-- VENDRE -->
@@ -233,6 +247,7 @@ a.link{color:var(--acc2)}
 
 <nav>
   <button id="navRecent" class="on">Récent</button>
+  <button id="navDeals">Affaires</button>
   <button id="navSell">Vendre</button>
   <button id="navStock">Stock</button>
 </nav>
@@ -315,7 +330,7 @@ let pendTries = 0, seen = new Set(), newIds = new Set(), firstLoad = true, items
 /* ---------- Onglets ---------- */
 function showTab(name){
   curTab = name;
-  for (const t of ['recent', 'sell', 'stock']) {
+  for (const t of ['recent', 'deals', 'sell', 'stock']) {
     $('#tab-' + t).classList.toggle('active', t === name);
     $('#nav' + t[0].toUpperCase() + t.slice(1)).classList.toggle('on', t === name);
   }
@@ -323,6 +338,7 @@ function showTab(name){
   if (name === 'stock') loadState();
 }
 $('#navRecent').onclick = () => showTab('recent');
+$('#navDeals').onclick = () => { showTab('deals'); renderDeals(); };
 $('#navSell').onclick = () => showTab('sell');
 $('#navStock').onclick = () => showTab('stock');
 
@@ -421,6 +437,51 @@ async function setRef(it, d){
   if (!Number.isFinite(price) || price < 0) { alert('Prix invalide'); return; }
   try{ await api('/api/ref', 'POST', {key: it.refKey, price}); toast(price > 0 ? 'Prix de référence enregistré' : 'Prix effacé'); load(); }catch(e){ alert('Erreur : ' + e.message); }
 }
+/* ---------- Affaires : annonces avec un score d'au moins 1/100, conservées 24 h ---------- */
+const DEALS_TTL = 24 * 3600 * 1000;
+let dealsSort = 'score', deals = {};
+try{ deals = JSON.parse(localStorage.getItem('pd_deals') || '{}') || {}; }catch(e){ deals = {}; }
+function saveDeals(){ try{ localStorage.setItem('pd_deals', JSON.stringify(deals)); }catch(e){} }
+function updateDeals(list){
+  const now = Date.now(), fetched = new Set(list.map(i => i.id));
+  for (const it of list) {
+    if (it.deal && it.deal.score >= 1) deals[it.id] = {it, first: deals[it.id] ? deals[it.id].first : now, seen: now};
+    else delete deals[it.id]; // plus d'affaire (prix changé, prix de référence modifié…)
+  }
+  for (const [id, e] of Object.entries(deals)) if (!fetched.has(e.it.id) && now - e.seen > DEALS_TTL) delete deals[id];
+  const ids = Object.keys(deals);
+  if (ids.length > 200) for (const id of ids.sort((a, b) => deals[a].seen - deals[b].seen).slice(0, ids.length - 200)) delete deals[id];
+  saveDeals();
+}
+function dealsList(){
+  const l = Object.values(deals);
+  const by = {score: e => e.it.deal.score * 1000 + e.it.deal.margin, margin: e => e.it.deal.margin, seen: e => e.first};
+  return l.sort((a, b) => by[dealsSort](b) - by[dealsSort](a));
+}
+function renderDeals(){
+  const l = dealsList();
+  $('#navDeals').textContent = l.length ? 'Affaires (' + l.length + ')' : 'Affaires';
+  if (curTab !== 'deals') return;
+  const live = new Set(items.map(i => i.id));
+  const nodes = l.map(e => {
+    const box = itemEl(e.it);
+    const rm = tag('button', 'rm', '✕'); rm.title = 'Retirer';
+    rm.addEventListener('click', () => { delete deals[e.it.id]; saveDeals(); renderDeals(); });
+    box.appendChild(rm);
+    if (!live.has(e.it.id)) box.querySelector('.meta').appendChild(tag('div', 'sm', 'Plus dans les récents (vue ' + (Date.now() - e.seen < 90000 ? "à l'instant" : 'il y a ' + ago(Math.floor(e.seen / 1000))) + ') : vérifie qu\'elle est toujours en ligne'));
+    return box;
+  });
+  $('#dealsGrid').replaceChildren(...nodes);
+  $('#dealsEmpty').style.display = l.length ? 'none' : 'block';
+  $('#dealsInfo').textContent = l.length ? l.length + ' affaire(s) · meilleur score ' + Math.max(...l.map(e => e.it.deal.score)) + '/100' : '';
+}
+for (const c of document.querySelectorAll('#dealsBar [data-sort]')) c.onclick = () => {
+  dealsSort = c.dataset.sort;
+  for (const x of document.querySelectorAll('#dealsBar [data-sort]')) x.classList.toggle('on', x === c);
+  renderDeals();
+};
+$('#dealsClear').onclick = () => { if (Object.keys(deals).length && confirm('Retirer toutes les affaires de cet onglet ?')) { deals = {}; saveDeals(); renderDeals(); } };
+
 function render(){
   let list = items;
   if (onlyNew) list = list.filter(i => newIds.has(i.id));
@@ -428,6 +489,7 @@ function render(){
   if (onlyDeals || sortScore) list = [...list].sort((a, b) => (b.deal ? b.deal.score : -1) - (a.deal ? a.deal.score : -1) || (b.deal ? b.deal.margin : 0) - (a.deal ? a.deal.margin : 0));
   $('#grid').replaceChildren(...list.map(itemEl));
   $('#empty').style.display = list.length ? 'none' : 'block';
+  renderDeals();
 }
 
 function beep(){
@@ -450,10 +512,11 @@ async function load(){
     let fresh = 0;
     for (const it of j.items) if (!seen.has(it.id)) { seen.add(it.id); if (!firstLoad) { newIds.add(it.id); fresh++; } }
     items = j.items; firstLoad = false;
+    updateDeals(items);
     render();
     if (fresh) { if (sound) beep(); if (navigator.vibrate) navigator.vibrate(120); }
     // la lecture des photos (langue) se poursuit en arrière-plan : on rafraîchit vite tant qu'elle n'est pas finie
-    if (j.pending && pendTries < 10) { pendTries++; setTimeout(() => { if (curTab === 'recent') load(); }, 4000); } else if (!j.pending) pendTries = 0;
+    if (j.pending && pendTries < 10) { pendTries++; setTimeout(() => { if (curTab === 'recent' || curTab === 'deals') load(); }, 4000); } else if (!j.pending) pendTries = 0;
     const deals = items.filter(i => i.deal && i.deal.level !== 'none').length;
     $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + (j.hidden && j.hidden.other ? ` · ${j.hidden.other} autre(s) langue(s)` : '') + (j.hidden && j.hidden.unverified ? ` · ${j.hidden.unverified} non confirmée(s)` : '') + (j.pending ? ' · lecture des photos…' : '') + (j.langError ? ' · vérif. langue indisponible' : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
   }catch(e){
@@ -462,9 +525,9 @@ async function load(){
 }
 function schedule(){
   clearInterval(timer);
-  if (live) timer = setInterval(() => { if (!document.hidden && curTab === 'recent') load(); }, Math.max(30, 15 * queries().length) * 1000);
+  if (live) timer = setInterval(() => { if (!document.hidden && (curTab === 'recent' || curTab === 'deals')) load(); }, Math.max(30, 15 * queries().length) * 1000);
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && curTab === 'recent') load(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && (curTab === 'recent' || curTab === 'deals')) load(); });
 
 $('#chipLive').onclick = e => { live = !live; e.target.classList.toggle('on', live); schedule(); };
 $('#chipSound').onclick = e => { sound = !sound; e.target.classList.toggle('on', sound); e.target.textContent = 'Son : ' + (sound ? 'on' : 'off'); if (sound) beep(); };
