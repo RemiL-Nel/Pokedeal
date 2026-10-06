@@ -126,20 +126,30 @@ a.link{color:var(--acc2)}
 
   <!-- VENDRE -->
   <section class="tab" id="tab-sell">
-    <div class="warnbox" id="sellNote" style="display:none">L'identification par photo utilise l'IA d'Anthropic (payant). Sans clé, cet onglet ne peut pas analyser la photo (le reste de l'appli n'en a pas besoin).</div>
     <label class="drop" for="file">
       <b>Prendre la carte en photo</b>
-      <span>L'IA identifie la carte, estime le prix et rédige l'annonce.</span>
+      <span>Le numéro et le nom sont lus sur le téléphone (sans IA), puis prix Cardmarket et annonce prête.</span>
     </label>
     <input id="file" type="file" accept="image/*" capture="environment" hidden>
     <img id="preview" alt="">
-    <div class="spin" id="spin">Analyse de la carte…</div>
+    <div class="spin" id="spin">Lecture de la carte…</div>
     <div id="sellErr" class="err" style="display:none"></div>
+    <div class="panel" id="manual" style="display:none">
+      <h3>Carte non identifiée</h3>
+      <div class="note" id="manualNote"></div>
+      <label for="mNum">Numéro de la carte (en bas de carte, ex. 025/165)</label>
+      <input id="mNum" class="field" placeholder="025/165" autocomplete="off">
+      <label for="mName">Nom de la carte (en français, aide à valider)</label>
+      <input id="mName" class="field" placeholder="Dracaufeu" autocomplete="off">
+      <div class="btns"><button class="btn" id="mGo">Chercher</button><button class="btn sec" id="aiBtn" style="display:none">Essayer avec l'IA (payant)</button></div>
+    </div>
     <div id="result" style="display:none">
       <div class="panel"><h3>Carte détectée</h3><div id="cardInfo"></div></div>
       <div class="panel"><h3>Prix du marché (Cardmarket)</h3><div id="marketInfo"></div></div>
       <div class="panel">
         <h3>Annonce Vinted</h3>
+        <label for="lCond">État de la carte</label>
+        <select id="lCond" class="field"><option>Neuf</option><option selected>Très bon état</option><option>Bon état</option><option>Satisfaisant</option></select>
         <label for="lTitle">Titre</label><input id="lTitle" class="field">
         <label for="lPrice">Prix (€)</label><input id="lPrice" class="field" type="number" inputmode="decimal" step="0.1">
         <label for="lDesc">Description</label><textarea id="lDesc" class="field"></textarea>
@@ -192,9 +202,9 @@ a.link{color:var(--acc2)}
 
     <div class="panel">
       <h3>Réglages</h3>
-      <label for="sKey">Clé API Anthropic (optionnelle, seulement pour identifier une carte par photo dans « Vendre ») <span id="sKeyState"></span></label>
+      <label for="sKey">Clé API Anthropic (optionnelle : bouton « Essayer avec l'IA » dans Vendre, et vérification de langue de secours) <span id="sKeyState"></span></label>
       <input id="sKey" class="field" type="password" autocomplete="off" placeholder="sk-ant-…">
-      <label class="check"><input type="checkbox" id="sLang"> Vérifier la langue sur la photo (IA Anthropic, payant, nécessite la clé ci-dessus). Sans ça, la langue vient du titre.</label>
+      <label class="check"><input type="checkbox" id="sLang"> Vérifier aussi la langue avec l'IA quand le titre et la lecture de la photo ne suffisent pas (payant, nécessite la clé ci-dessus).</label>
       <div class="two">
         <div style="flex:1"><label for="sShip">Port moyen à l'achat (€)</label><input id="sShip" class="field" type="number" inputmode="decimal" step="0.1"></div>
         <div style="flex:1"><label for="sFee">Commission revente (%)</label><input id="sFee" class="field" type="number" inputmode="decimal" step="0.5"></div>
@@ -260,7 +270,22 @@ async function notify({title, body, url}){
 })();
 
 /* ---------- Moteur local ---------- */
+/* OCR sur le téléphone (Google ML Kit, hors ligne, gratuit) */
+const TR = plug('TextRecognition'), FSP = plug('Filesystem');
+let ocrSeq = 0;
+async function ocrFromUri(uri){ const r = await TR.processImage({path: uri}); return (r && r.text) || ''; }
+async function ocrFromUrl(url){
+  const name = 'ocr' + (ocrSeq++ % 6) + '.jpg';
+  await FSP.downloadFile({url, path: name, directory: 'CACHE'});
+  const u = await FSP.getUri({path: name, directory: 'CACHE'});
+  return ocrFromUri(u.uri);
+}
+async function ocrFromDataUrl(dataUrl){
+  const w = await FSP.writeFile({path: 'scan.jpg', data: dataUrl.split(',')[1], directory: 'CACHE'});
+  return ocrFromUri(w.uri);
+}
 const core = PDCore.createCore({
+  ocr: TR && FSP ? ocrFromUrl : undefined,
   request: PDCore.makeRequest(window),
   storage: window.localStorage,
   notify,
@@ -294,7 +319,6 @@ async function loadState(){
   try{
     app = await api('/api/state');
     renderBudget(); renderStock(); renderWatch(); renderSettings();
-    $('#sellNote').style.display = app.config.canIdentify ? 'none' : 'block';
     render();
   }catch(e){ /* l'onglet Récent affichera l'erreur */ }
 }
@@ -337,7 +361,7 @@ function itemEl(it){
   meta.appendChild(price);
   meta.appendChild(tag('div', 'ttl', it.title));
   if (it.analysis) {
-    const L = {fr: '🇫🇷 FR' + (it.langSrc === 'photo' ? ' (photo)' : it.langSrc === 'nom' ? ' (nom français)' : ''), other: 'Autre langue', unknown: 'langue non vérifiée'}[it.lang] || '';
+    const L = {fr: '🇫🇷 FR' + (it.langSrc === 'photo' ? ' (photo, IA)' : it.langSrc === 'ocr' ? ' (lu sur la photo)' : it.langSrc === 'nom' ? ' (nom français)' : ''), other: 'Autre langue', unknown: 'langue non vérifiée'}[it.lang] || '';
     if (L) meta.appendChild(tag('div', 'sm', L));
   }
   if (d && d.level !== 'none') {
@@ -574,26 +598,61 @@ function fillKv(el, rows){
     const d = tag('div', 'kv'); d.append(tag('span', '', k), tag('span', '', v)); el.appendChild(d);
   }
 }
+let scan = {text: '', number: '', name: '', mode: 'scan'};
+function showCard(j){
+  fillKv($('#cardInfo'), [['Nom', j.card.name_fr || j.card.name], ['Nom EN', j.card.name_fr && j.card.name !== j.card.name_fr ? j.card.name : ''], ['Extension', j.card.set], ['Numéro', j.card.number], ['Rareté', j.card.rarity], ['Langue', j.card.language], ['État', j.card.condition], ['Défauts', j.card.condition_notes]]);
+  const mi = $('#marketInfo');
+  if (j.market) {
+    fillKv(mi, [['Correspondance', j.market.matched], ['Tendance', j.market.trend != null ? fmt(j.market.trend) : ''], ['Moyenne 30 j', j.market.avg30 != null ? fmt(j.market.avg30) : ''], ['Prix mini', j.market.low != null ? fmt(j.market.low) : '']]);
+    if (j.market.url) { const a = tag('a', 'link', 'Voir sur Cardmarket'); a.href = safeUrl(j.market.url); a.target = '_blank'; a.rel = 'noopener'; const d = tag('div', 'note'); d.appendChild(a); mi.appendChild(d); }
+  } else { mi.replaceChildren(tag('div', 'note', 'Prix introuvable automatiquement : vérifie sur Cardmarket avant de fixer le tien.')); }
+  $('#lTitle').value = j.listing.title; $('#lDesc').value = j.listing.description; $('#lPrice').value = j.listing.suggestedPrice ?? '';
+  $('#result').style.display = 'block';
+}
+async function runScan(){
+  $('#sellErr').style.display = 'none'; $('#spin').style.display = 'block';
+  try{
+    scan.mode = 'scan';
+    const j = await api('/api/scan', 'POST', {text: scan.text, number: scan.number, name: scan.name, condition: $('#lCond').value});
+    const man = $('#manual');
+    if (j.found) { man.style.display = 'none'; showCard(j); }
+    else {
+      $('#result').style.display = 'none'; man.style.display = 'block';
+      $('#mNum').value = scan.number || j.ocr.number || ''; $('#mName').value = scan.name || '';
+      $('#manualNote').textContent = j.card.number
+        ? "Aucune carte trouvée pour " + j.card.number + " avec ce nom. Vérifie le numéro et ajoute le nom en français."
+        : (scan.text ? "Le numéro n'a pas été lu sur la photo (reflets, flou, cadrage). Tape-le ci-dessous, ou refais la photo de plus près, bien à plat." : "Lecture automatique indisponible ici : tape le numéro de la carte.");
+      $('#aiBtn').style.display = (app.config || {}).canIdentify && lastDataUrl ? '' : 'none';
+    }
+  }catch(err){
+    $('#sellErr').style.display = 'block'; $('#sellErr').textContent = 'Erreur : ' + err.message;
+  }finally{ $('#spin').style.display = 'none'; }
+}
 $('#file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  $('#sellErr').style.display = 'none'; $('#result').style.display = 'none'; $('#spin').style.display = 'block';
+  $('#sellErr').style.display = 'none'; $('#result').style.display = 'none'; $('#manual').style.display = 'none'; $('#spin').style.display = 'block';
   try{
-    const {dataUrl} = await shrink(f);
+    const {dataUrl} = await shrink(f, 1600);
     lastDataUrl = dataUrl;
     $('#preview').src = dataUrl; $('#preview').style.display = 'block';
-    const j = await api('/api/identify', 'POST', {image: dataUrl});
-    fillKv($('#cardInfo'), [['Nom', j.card.name_fr || j.card.name], ['Nom EN', j.card.name_fr ? j.card.name : ''], ['Extension', j.card.set], ['Numéro', j.card.number], ['Rareté', j.card.rarity], ['Langue', j.card.language], ['État estimé', j.card.condition], ['Défauts', j.card.condition_notes]]);
-    const mi = $('#marketInfo');
-    if (j.market) {
-      fillKv(mi, [['Correspondance', j.market.matched], ['Tendance', j.market.trend != null ? fmt(j.market.trend) : ''], ['Moyenne 30 j', j.market.avg30 != null ? fmt(j.market.avg30) : ''], ['Prix mini', j.market.low != null ? fmt(j.market.low) : '']]);
-      if (j.market.url) { const a = tag('a', 'link', 'Voir sur Cardmarket'); a.href = safeUrl(j.market.url); a.target = '_blank'; a.rel = 'noopener'; const d = tag('div', 'note'); d.appendChild(a); mi.appendChild(d); }
-    } else { mi.replaceChildren(tag('div', 'note', 'Prix introuvable automatiquement : vérifie sur Cardmarket avant de fixer le tien.')); }
-    $('#lTitle').value = j.listing.title; $('#lDesc').value = j.listing.description; $('#lPrice').value = j.listing.suggestedPrice ?? '';
-    $('#result').style.display = 'block';
+    scan = {text: '', number: '', name: '', mode: 'scan'};
+    if (TR && FSP) { try{ scan.text = await ocrFromDataUrl(dataUrl); }catch(err){ scan.text = ''; } }
+    await runScan();
   }catch(err){
     $('#sellErr').style.display = 'block'; $('#sellErr').textContent = 'Erreur : ' + err.message;
   }finally{ $('#spin').style.display = 'none'; e.target.value = ''; }
 });
+$('#mGo').onclick = () => { scan.number = $('#mNum').value.trim(); scan.name = $('#mName').value.trim(); runScan(); };
+$('#lCond').onchange = () => { if (scan.mode === 'scan' && $('#result').style.display !== 'none') runScan(); };
+$('#aiBtn').onclick = async () => {
+  if (!lastDataUrl) return;
+  $('#sellErr').style.display = 'none'; $('#spin').style.display = 'block';
+  try{
+    const j = await api('/api/identify', 'POST', {image: lastDataUrl});
+    scan.mode = 'ai'; $('#manual').style.display = 'none'; showCard(j);
+  }catch(err){ $('#sellErr').style.display = 'block'; $('#sellErr').textContent = 'Erreur : ' + err.message; }
+  finally{ $('#spin').style.display = 'none'; }
+};
 async function copy(text, btn){
   try{ await navigator.clipboard.writeText(text); const t = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => btn.textContent = t, 1200); }catch{ prompt('Copie ce texte :', text); }
 }

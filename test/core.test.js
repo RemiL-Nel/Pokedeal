@@ -285,6 +285,87 @@ const test = (name, fn) => tests.push({ name, fn });
     }
   });
 
+  const FR_TEXT = 'Dracaufeu PV 120 Pokémon de base\nAttaque Feu Rotatif\nFaiblesse Eau x2 Retraite 3\nIllus. Mitsuhiro Arita 4/102';
+  const EN_TEXT = 'Charizard HP 120 Basic Pokémon\nAttack Fire Spin\nWeakness Water Retreat Cost 3\nIllus. Mitsuhiro Arita 4/102';
+
+  test('OCR : numéro en bas de carte, confusion O/0, langue par mots imprimés', () => {
+    const { parseCardText } = createCore({ request: makeRequest(globalThis), storage: memStorage() });
+    const fr = parseCardText(FR_TEXT);
+    assert.deepEqual([fr.number, fr.total, fr.lang, fr.strong], ['4', 102, 'fr', true]);
+    assert.equal(parseCardText(EN_TEXT).lang, 'other');
+    assert.equal(parseCardText('O04/102').number, '4', '« O04 » lu pour « 004 »');
+    assert.equal(parseCardText('PV 90 12/20 ... 058 / 102').number, '58', 'le dernier numéro lu (bas de carte) gagne');
+    assert.equal(parseCardText('Résistance Illus. Jean').lang, 'unknown', 'mots identiques FR/EN ignorés');
+    assert.equal(parseCardText('').number, '');
+  });
+
+  test('Scan sans IA : texte OCR → carte, prix, annonce FR ; état modifiable', async () => {
+    claudeCalls.length = 0;
+    const core = mk();
+    const j = await core.api('/api/scan', 'POST', { text: FR_TEXT, condition: 'Bon état' });
+    assert.equal(j.found, true);
+    assert.equal(j.card.name_fr, 'Dracaufeu');
+    assert.equal(j.card.set, 'Set de Base');
+    assert.equal(j.card.language, 'FR');
+    assert.equal(j.market.trend, 80);
+    assert.equal(j.listing.suggestedPrice, 80);
+    assert.match(j.listing.title, /Dracaufeu 4\/102 Set de Base FR/);
+    assert.match(j.listing.description, /État : Bon état/);
+    assert.equal(claudeCalls.length, 0, 'aucun appel IA');
+  });
+
+  test('Scan : numéro tapé à la main, numéro non lu, mauvais nom', async () => {
+    const core = mk();
+    const manual = await core.api('/api/scan', 'POST', { text: '', number: '58/102', name: 'Pikachu' });
+    assert.equal(manual.found, true);
+    assert.equal(manual.card.name_fr, 'Pikachu');
+    const none = await core.api('/api/scan', 'POST', { text: 'reflets illisibles', name: 'Dracaufeu' });
+    assert.equal(none.found, false);
+    assert.equal(none.card.name_fr, 'Dracaufeu');
+    assert.match(none.listing.title, /Dracaufeu/);
+    // 7/99 existe dans deux extensions : sans nom, pas de carte ; avec le nom, c'est tranché
+    assert.equal((await core.api('/api/scan', 'POST', { number: '7/99' })).found, false);
+    assert.equal((await core.api('/api/scan', 'POST', { number: '7/99', name: 'Truc' })).market.trend, 30);
+  });
+
+  test('Langue des annonces : OCR de la photo gratuit, IA seulement en dernier recours', async () => {
+    const saved = vintedItems.slice();
+    vintedItems.length = 0;
+    const mkItem = (id, title, photo) => ({ id, title, price: { amount: '5.0' }, photo: { url: photo }, user: { login: 'u' + id } });
+    vintedItems.push(mkItem(51, 'Carte neuve 4/102', 'http://x/en/51.jpg'));    // OCR : anglais
+    vintedItems.push(mkItem(52, 'Carte neuve 58/102', 'http://x/fr/52.jpg'));   // OCR : français
+    vintedItems.push(mkItem(53, 'Carte neuve 4/102 bis', 'http://x/blur/53.jpg')); // OCR illisible
+    const ocrCalls = [];
+    const ocr = async (url) => { ocrCalls.push(url); if (url.includes('/en/')) return EN_TEXT; if (url.includes('/fr/')) return FR_TEXT; if (url.includes('/boom/')) throw new Error('x'); return 'flou'; };
+    try {
+      langCalls.length = 0;
+      const core = mk({ ocr });
+      let j = await core.api('/api/recent?q=x');
+      let by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(by[51], undefined, 'anglaise lue sur la photo : masquée');
+      assert.equal(by[52].lang, 'fr'); assert.equal(by[52].langSrc, 'ocr');
+      assert.equal(by[53].lang, 'unknown');
+      assert.equal(langCalls.length, 0, 'sans clé : aucun appel IA');
+      const n = ocrCalls.length;
+      await core.api('/api/recent?q=x');
+      assert.equal(ocrCalls.length, n, 'résultat OCR mis en cache');
+      // avec clé + option : l'IA ne voit que ce que l'OCR n'a pas su lire
+      langCalls.length = 0;
+      const core2 = mk({ ocr });
+      await core2.api('/api/settings', 'POST', { anthropicKey: 'sk-test', langCheck: true });
+      j = await core2.api('/api/recent?q=x');
+      assert.deepEqual(langCalls.map((c) => c.url), ['http://x/blur/53.jpg']);
+      // OCR en erreur : l'appli continue
+      vintedItems.length = 0;
+      vintedItems.push(mkItem(54, 'Carte neuve 4/102', 'http://x/boom/54.jpg'));
+      j = await mk({ ocr }).api('/api/recent?q=x');
+      assert.equal(j.items.length, 1);
+    } finally {
+      vintedItems.length = 0;
+      vintedItems.push(...saved);
+    }
+  });
+
   test('Chemin natif Android : cookies en chaîne jointe, jeton lu depuis set-cookie', async () => {
     const log = [];
     const core = mk({}, fakeNative(log));

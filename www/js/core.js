@@ -392,6 +392,26 @@
       return out;
     }
 
+    /* ---------- Lecture du texte OCR d'une carte (sans IA) ---------- */
+    const FR_WORDS = [/\bfaiblesse\b/, /\bretraite\b/, /\bevolue de\b/, /\bpokemon de base\b/, /\bstade [12]\b/, /\bdresseur\b/, /\benergie\b/, /\bpv\s*\d/, /\btalent\b/, /\battaque\b/];
+    const EN_WORDS = [/\bweakness\b/, /\bretreat\b/, /\bevolves from\b/, /\bbasic pokemon\b/, /\bstage [12]\b/, /\btrainer\b/, /\benergy\b/, /\bhp\s*\d/, /\bability\b/, /\battack\b/];
+    // « résistance » et « Illus. » sont identiques en FR/EN : ignorés
+    function parseCardText(text) {
+      const raw = String(text || '').replace(/(?<![A-Za-z])[Oo](?=\d{1,2}\s*\/)/g, '0'); // « O04/102 » lu par l'OCR
+      const t = plain(raw);
+      const nums = [];
+      for (const m of t.matchAll(/(?<![\d/])(\d{1,3})\s*\/\s*(\d{1,3})(?![\d/])/g)) {
+        const n = parseInt(m[1], 10);
+        const tot = parseInt(m[2], 10);
+        if (tot >= 15 && n >= 1 && n <= tot + 150) nums.push({ number: String(n), total: tot });
+      }
+      const num = nums.length ? nums[nums.length - 1] : null; // le numéro est en bas de carte : dernier lu
+      const fr = FR_WORDS.filter((r) => r.test(t)).length;
+      const en = EN_WORDS.filter((r) => r.test(t)).length;
+      const lang = fr > en ? 'fr' : en > fr ? 'other' : 'unknown';
+      return { number: num ? num.number : '', total: num ? num.total : 0, lang, strong: Math.max(fr, en) >= 2 && fr !== en, frHits: fr, enHits: en };
+    }
+
     /* ---------- Langue de la carte ---------- */
     const OTHER_LANG_WORDS = /\b(english|anglais|anglaise|japonais|japonaise|japanese|jap|jpn|korean|coreen|coreenne|allemand|allemande|deutsch|german|espagnol|espagnole|spanish|italien|italienne|italian|portugais|portugaise|chinois|chinoise|chinese|thai)\b/;
     const OTHER_LANG_CODES = new Set(['EN', 'ENG', 'JP', 'JPN', 'KR', 'KO', 'DE', 'ES', 'IT', 'PT', 'ZH', 'CN', 'TH']);
@@ -407,26 +427,46 @@
       return fr && !other ? 'fr' : other && !fr ? 'other' : 'unknown';
     }
 
-    const langCache = new Map(); // id d'annonce -> { v: 'fr'|'other'|'unknown', tries }
+    const langCache = new Map(); // id d'annonce -> { v: 'fr'|'other'|'unknown', src, tries, ocr, ai }
     let langCooldownUntil = 0;
     let lastLangError = null;
+    const ocrAvailable = typeof env.ocr === 'function'; // reconnaissance de texte sur le téléphone, gratuite
     const langCheckOn = () => !!(settings.langCheck && settings.anthropicKey);
     const LANG_MAX = 8; // vérifications de photo par passage
 
-    // Langue retenue : titre explicite > photo (IA) > nom français dans le titre > inconnue
+    // Langue retenue : titre explicite > photo (OCR puis IA) > nom français dans le titre > inconnue
     function langOf(it, a) {
       const t = a && a.lang;
       if (t === 'fr' || t === 'other') return { lang: t, src: 'titre' };
       const c = langCache.get(it.id);
-      if (c && c.v !== 'unknown') return { lang: c.v, src: 'photo' };
+      if (c && c.v !== 'unknown') return { lang: c.v, src: c.src };
       if (a && a.market && a.market.nameChecked) return { lang: 'fr', src: 'nom' };
       return { lang: 'unknown', src: '' };
     }
-    const needsLangCheck = (it, a) => !!(a && a.single && langCheckOn() && it.photo && langOf(it, a).lang === 'unknown' && (langCache.get(it.id) || { tries: 0 }).tries < 2);
+    const needsLangCheck = (it, a) => {
+      if (!(a && a.single && it.photo && langOf(it, a).lang === 'unknown')) return false;
+      const e = langCache.get(it.id) || {};
+      return (ocrAvailable && !e.ocr) || (langCheckOn() && !e.ai && (e.tries || 0) < 2);
+    };
 
     async function checkLangPhoto(it) {
       const entry = langCache.get(it.id) || { v: 'unknown', tries: 0 };
       langCache.set(it.id, entry);
+      if (ocrAvailable && !entry.ocr) {
+        try {
+          const r = parseCardText(await env.ocr(it.photo));
+          if (r.strong) {
+            entry.v = r.lang === 'fr' ? 'fr' : 'other';
+            entry.src = 'ocr';
+          }
+          entry.ocr = 'ok';
+        } catch {
+          entry.ocr = 'err';
+        }
+        if (entry.v !== 'unknown') return;
+      }
+      if (!langCheckOn() || entry.ai) return;
+      entry.ai = true;
       entry.tries++;
       const text = await claude(
         [
@@ -439,13 +479,14 @@
       );
       const w = (/[A-Za-z]+/.exec(text) || [''])[0].toUpperCase();
       entry.v = w === 'FR' ? 'fr' : ['EN', 'JP', 'DE', 'ES', 'IT', 'KO', 'ZH', 'PT', 'AUTRE'].includes(w) ? 'other' : 'unknown';
+      entry.src = 'photo';
     }
 
     async function checkLanguages(items) {
-      if (!langCheckOn() || Date.now() < langCooldownUntil) return;
+      if (Date.now() < langCooldownUntil) return;
       const todo = items.filter((it) => needsLangCheck(it, analysisCache.get(it.id))).slice(0, LANG_MAX);
       if (!todo.length) return;
-      await pool(todo, 3, async (it) => {
+      await pool(todo, 2, async (it) => {
         try {
           await checkLangPhoto(it);
           lastLangError = null;
@@ -791,6 +832,30 @@
         const market = nm ? await resolveCard({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }, `${card.name_fr || ''} ${card.name || ''}`) : null;
         return { card, market, listing: buildListing(card, market ? market.trend : null) };
       }
+      if (p === '/api/scan' && method === 'POST') {
+        // Carte scannée par OCR sur le téléphone (ou numéro saisi à la main) : aucune IA
+        const b = body || {};
+        const parsed = parseCardText(b.text);
+        let number = parsed.number;
+        let total = parsed.total;
+        const man = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(String(b.number || ''));
+        if (man) {
+          number = String(parseInt(man[1], 10));
+          total = parseInt(man[2], 10);
+        }
+        const condition = ['Neuf', 'Très bon état', 'Bon état', 'Satisfaisant'].includes(b.condition) ? b.condition : 'Très bon état';
+        const language = parsed.lang === 'fr' ? 'FR' : parsed.lang === 'other' ? 'EN' : '';
+        const ocr = { number: parsed.number ? `${parsed.number}/${parsed.total}` : '', lang: parsed.lang };
+        const base = { language, condition, rarity: '', condition_notes: '' };
+        if (!number || !total) {
+          const card = { ...base, name_fr: String(b.name || '').trim(), name: '', set: '', number: '' };
+          return { found: false, card, market: null, listing: buildListing(card, null), ocr };
+        }
+        const market = await resolveCard({ number, total }, `${b.text || ''} ${b.name || ''}`);
+        if (market === undefined) throw new Error('Prix indisponibles pour le moment, réessaie dans un instant.');
+        const card = { ...base, name_fr: market ? market.name : String(b.name || '').trim(), name: '', set: market ? market.set : '', number: `${number}/${total}` };
+        return { found: !!market, card, market, listing: buildListing(card, market ? market.trend : null), ocr };
+      }
       if (p === '/api/budget' && method === 'POST') {
         state.budget.monthly = r2(Math.max(0, num(body && body.monthly, 0)));
         save();
@@ -831,7 +896,7 @@
 
     if (state.watch.enabled) restartWatch();
 
-    return { api, parseTitle };
+    return { api, parseTitle, parseCardText };
   }
 
   const api = { createCore, makeRequest, parseSetCookie };
