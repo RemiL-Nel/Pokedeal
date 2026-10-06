@@ -91,10 +91,11 @@
         storage.setItem(k, JSON.stringify(v));
       } catch {}
     };
-    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05, frMode: 'strict', langCheck: false, langModel: 'claude-haiku-4-5-20251001' });
+    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05, frMode: 'strict', haircut: 10, langCheck: false, langModel: 'claude-haiku-4-5-20251001' });
     const defState = () => ({
       watch: { enabled: false, queries: ['carte pokemon'], maxPrice: null, onlyDeals: true, intervalSec: 60 },
       budget: { monthly: 0 },
+      refPrices: {}, // prix de référence saisis à la main (Cardmarket FR near mint, ventes eBay…), par carte
       inventory: [],
       nextId: 1,
     });
@@ -427,7 +428,7 @@
       const fr = count(FR_WORDS);
       const foreign = count(EN_WORDS) + count(OTHER_WORDS) + (cjk >= 6 ? 3 : 0);
       const lang = fr > foreign ? 'fr' : foreign > fr ? 'other' : 'unknown';
-      return { number: num ? num.number : '', total: num ? num.total : 0, lang, strong: Math.max(fr, foreign) >= 2 && fr !== foreign, frHits: fr, foreignHits: foreign, cjk };
+      return { number: num ? num.number : '', total: num ? num.total : 0, pairs: nums, lang, strong: Math.max(fr, foreign) >= 2 && fr !== foreign, frHits: fr, foreignHits: foreign, cjk };
     }
 
     /* ---------- Langue de la carte ---------- */
@@ -463,11 +464,36 @@
       return { lang: 'unknown', src: '' };
     }
     // La photo d'un lot ne dit rien de la langue ; l'IA (payante) n'est consultée que pour les cartes identifiées
+    // L'OCR lit toutes les photos de cartes (langue + numéro imprimé, pour recouper le titre) ; l'IA n'est consultée que si langue inconnue
     const needsLangCheck = (it, a) => {
-      if (!(a && !a.lot && it.photo && langOf(it, a).lang === 'unknown')) return false;
+      if (!(a && !a.lot && it.photo)) return false;
       const e = langCache.get(it.id) || {};
-      return (ocrAvailable && !e.ocr) || (langCheckOn() && a.single && !e.ai && (e.tries || 0) < 2);
+      const unknown = langOf(it, a).lang === 'unknown';
+      return (ocrAvailable && !e.ocr && (unknown || a.single)) || (langCheckOn() && unknown && a.single && !e.ai && (e.tries || 0) < 2);
     };
+
+    // Recoupe le numéro du titre avec ceux imprimés sur la carte (photo). Une carte peut porter plusieurs « n/total »
+    // (ex. 038/128 + badge 16/30) : on ne garde que les identifications où le nom est vérifié, et si plusieurs
+    // le sont, celle au plus grand total (numérotation de l'extension plutôt que d'un badge) en la signalant comme moins sûre.
+    async function reconcile(it, a, text) {
+      if (!a || !a.single || a.reconciled) return;
+      a.reconciled = true;
+      const mine = `${a.number}/${a.total}`;
+      const extra = parseCardText(text).pairs.filter((p) => `${p.number}/${p.total}` !== mine).slice(0, 3);
+      if (!extra.length) return;
+      const cands = [];
+      if (a.market) cands.push({ n: a.number, t: a.total, m: a.market });
+      for (const p of extra) {
+        const m = await resolveCard({ number: p.number, total: p.total, reverse: a.reverse }, `${it.title} ${text}`);
+        if (m) cands.push({ n: p.number, t: p.total, m });
+      }
+      const ver = cands.filter((c) => c.m.nameChecked).sort((x, y) => y.t - x.t);
+      if (!ver.length) return;
+      const best = ver[0];
+      a.number = best.n;
+      a.total = best.t;
+      a.market = ver.length > 1 ? { ...best.m, multi: true } : best.m;
+    }
     // Filtre « cartes françaises » : strict = langue française confirmée ; loose = pas de langue étrangère confirmée ; off = tout.
     // Les lots (langue invérifiable) restent visibles sauf s'ils annoncent une autre langue.
     function frKeep(it, a) {
@@ -484,7 +510,11 @@
       langCache.set(it.id, entry);
       if (ocrAvailable && !entry.ocr) {
         try {
-          const r = parseCardText(await env.ocr(it.photo));
+          const a0 = analysisCache.get(it.id);
+          const text = await env.ocr(it.photo, { deep: langOf(it, a0).lang === 'unknown' });
+          entry.ocrText = String(text || '').slice(0, 3000);
+          const r = parseCardText(text);
+          await reconcile(it, a0, text);
           if (r.strong) {
             entry.v = r.lang === 'fr' ? 'fr' : 'other';
             entry.src = 'ocr';
@@ -539,6 +569,11 @@
         if (v === undefined) a.tries++;
         else a.market = v;
       });
+      for (const it of items) {
+        const e = langCache.get(it.id);
+        const a = analysisCache.get(it.id);
+        if (e && e.ocrText && a && a.single && a.market !== undefined && !a.reconciled) await reconcile(it, a, e.ocrText);
+      }
       if (analysisCache.size > 3000) [...analysisCache.keys()].slice(0, 800).forEach((k) => analysisCache.delete(k));
     }
 
@@ -553,22 +588,54 @@
      *   score /100 = ROI × 50, borné à [0 ; 100]   (ROI +200 % = 100)
      *   🔥 top : score ≥ 50 et marge ≥ 5 €  ·  👍 bien : score ≥ 25 et marge ≥ 2 €  (plafonné à « bien » si le nom n'est pas dans le titre)
      *   écart = prix payé / prix marché − 1 (info : un score de 0 veut dire « pas de marge », l'écart dit à quel point) */
-    const HAIRCUT = 0.9;
+    const refKeyOf = (it, a) => (a && a.single ? `${a.number}/${a.total}` : `id:${it.id}`);
+
     function dealFor(item, a) {
-      if (!a || !a.single || !a.market || item.price == null) return null;
-      const mkt = a.market.trend;
+      if (item.price == null) return null;
+      const manual = num(state.refPrices && state.refPrices[refKeyOf(item, a)], 0);
+      let mkt = 0;
+      let source = '';
+      if (manual > 0) {
+        mkt = manual;
+        source = 'manuel';
+      } else if (a && a.single && a.market && a.market.trend) {
+        mkt = a.market.trend;
+        source = 'cardmarket';
+      }
       if (!mkt) return null;
-      const cost = (item.totalPrice != null ? item.totalPrice : item.price) + num(settings.shipIn, 3);
-      const sell = mkt * HAIRCUT * (1 - num(settings.feeOut, 0.05));
+      const paid = item.totalPrice != null ? item.totalPrice : item.price;
+      const ship = num(settings.shipIn, 3);
+      const cost = paid + ship;
+      // prix saisi à la main = ton prix de revente réel : pas de décote ; prix Cardmarket (tendance) = décote prudente
+      const cut = source === 'manuel' ? 0 : Math.min(50, Math.max(0, num(settings.haircut, 10))) / 100;
+      const sell = mkt * (1 - cut) * (1 - num(settings.feeOut, 0.05));
       const margin = sell - cost;
       const roi = margin / cost;
       const score = Math.max(0, Math.min(100, Math.round(roi * 50)));
       let level = score >= 50 && margin >= 5 ? 'top' : score >= 25 && margin >= 2 ? 'good' : 'none';
-      const unverified = a.market.nameChecked === false; // nom de la carte absent du titre : identification moins sûre
+      const m = (source === 'cardmarket' && a.market) || null;
+      const unverified = !!m && (m.nameChecked === false || !!m.multi); // identification moins sûre
       if (unverified && level === 'top') level = 'good';
-      const paid = item.totalPrice != null ? item.totalPrice : item.price;
-      const gap = Math.round((paid / mkt - 1) * 100); // écart du prix payé vs prix du marché, en %
-      return { market: r2(mkt), cost: r2(cost), margin: r2(margin), roi: r2(roi), score, gap, level, unverified, matched: a.market.matched, cmUrl: a.market.url, image: a.market.image || '' };
+      const gap = Math.round((paid / mkt - 1) * 100); // écart du prix payé vs prix de référence, en %
+      return { market: r2(mkt), source, paid: r2(paid), ship: r2(ship), cost: r2(cost), sell: r2(sell), margin: r2(margin), roi: r2(roi), score, gap, level, unverified, matched: m ? m.matched : a && a.market ? a.market.matched : '', cmUrl: (a && a.market && a.market.url) || '', image: (m && m.image) || '' };
+    }
+
+    // Pourquoi pas de score ? (l'interface l'affiche : un score doit toujours être là, ou expliquer son absence)
+    function scoreReason(it, a) {
+      if (!a) return 'analyse en cours';
+      if (a.lot) return a.lotCount ? `lot de ${a.lotCount} cartes : pas de score` : 'lot : pas de score';
+      if (a.graded) return 'carte gradée : prix à vérifier à la main';
+      if (a.foreign) return 'carte étrangère : pas de score';
+      if (!a.single) return 'pas de numéro n/total dans le titre';
+      if (a.market === undefined) return 'prix en cours de recherche';
+      if (a.market === null) return 'carte non identifiée de façon sûre (nom ou extension absents du titre)';
+      return 'pas de prix Cardmarket pour cette carte';
+    }
+
+    // Texte de recherche pour vérifier à la main (Cardmarket FR near mint, ventes eBay réalisées)
+    function refSearchFor(it, a) {
+      if (a && a.single && a.market) return `${a.market.name} ${a.number}/${a.total} ${a.market.set || ''}`.trim();
+      return String(it.title || '').replace(/\s+/g, ' ').slice(0, 80);
     }
 
     function decorate(it) {
@@ -577,7 +644,8 @@
       const analysis = a && a.single ? { name: m ? m.name : '', number: `${a.number}/${a.total}`, set: m ? m.set : '' } : null;
       const lot = a && a.lotCount && it.price != null ? { count: a.lotCount, perCard: r2((it.totalPrice != null ? it.totalPrice : it.price) / a.lotCount) } : null;
       const lg = langOf(it, a);
-      return { ...it, analysis, lot, isLot: !!(a && a.lot), graded: !!(a && a.graded), lang: lg.lang, langSrc: lg.src, deal: dealFor(it, a) };
+      const deal = dealFor(it, a);
+      return { ...it, analysis, lot, isLot: !!(a && a.lot), graded: !!(a && a.graded), lang: lg.lang, langSrc: lg.src, refKey: refKeyOf(it, a), deal, scoreReason: deal ? '' : scoreReason(it, a), refSearch: refSearchFor(it, a) };
     }
 
     /* ---------- Identification d'une carte photographiée ---------- */
@@ -698,7 +766,7 @@
     }
 
     function exportData() {
-      return { app: 'pokedeals', version: 1, exportedAt: new Date().toISOString(), state: { watch: state.watch, budget: state.budget, inventory: state.inventory, nextId: state.nextId } };
+      return { app: 'pokedeals', version: 1, exportedAt: new Date().toISOString(), state: { watch: state.watch, budget: state.budget, refPrices: state.refPrices, inventory: state.inventory, nextId: state.nextId } };
     }
 
     function importData(obj) {
@@ -725,6 +793,10 @@
       state.inventory = inv;
       state.nextId = inv.reduce((m, i) => Math.max(m, i.id), 0) + 1;
       state.budget = { monthly: r2(Math.max(0, num(s.budget && s.budget.monthly, 0))) };
+      if (s.refPrices && typeof s.refPrices === 'object') {
+        state.refPrices = {};
+        for (const [k, v] of Object.entries(s.refPrices).slice(0, 2000)) if (num(v, 0) > 0) state.refPrices[String(k).slice(0, 40)] = r2(num(v, 0));
+      }
       save();
       return inv.length;
     }
@@ -851,7 +923,7 @@
           budget: state.budget,
           inventory: state.inventory,
           stats: stats(),
-          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut, frMode: settings.frMode, langCheck: !!settings.langCheck },
+          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut, haircut: settings.haircut, frMode: settings.frMode, langCheck: !!settings.langCheck },
           config: { canIdentify: canIdentify(), canScore: true, canNotify: true, canTelegram: canTelegram() },
         };
       }
@@ -860,6 +932,7 @@
         for (const k of ['anthropicKey', 'tgToken', 'tgChat', 'tcgKey', 'model']) if (typeof b[k] === 'string' && b[k].trim()) settings[k] = b[k].trim();
         for (const k of Array.isArray(b.clear) ? b.clear : []) if (['anthropicKey', 'tgToken', 'tgChat', 'tcgKey'].includes(k)) settings[k] = '';
         if (typeof b.langCheck === 'boolean') settings.langCheck = b.langCheck;
+        if (b.haircut != null && b.haircut !== '') settings.haircut = r2(Math.min(50, Math.max(0, num(b.haircut, 10))));
         if (['strict', 'loose', 'off'].includes(b.frMode)) settings.frMode = b.frMode;
         if (typeof b.frOnly === 'boolean') settings.frMode = b.frOnly ? 'strict' : 'off'; // ancien réglage
         if (b.shipIn != null && b.shipIn !== '') settings.shipIn = r2(Math.max(0, num(b.shipIn, 3)));
@@ -873,6 +946,16 @@
         const nm = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(card.number || '');
         const market = nm ? await resolveCard({ number: String(parseInt(nm[1], 10)), total: parseInt(nm[2], 10) }, `${card.name_fr || ''} ${card.name || ''}`, true) : null;
         return { card, market, listing: buildListing(card, market ? market.trend : null) };
+      }
+      if (p === '/api/ref' && method === 'POST') {
+        // Prix de référence saisi à la main pour une carte (clé « n/total » ou « id:… ») ; vide ou 0 = effacer
+        const key = String((body && body.key) || '').slice(0, 40);
+        if (!key) throw bad('Carte inconnue');
+        const price = num(body && body.price, 0);
+        if (price > 0) state.refPrices[key] = r2(price);
+        else delete state.refPrices[key];
+        save();
+        return { ok: true, refPrices: state.refPrices };
       }
       if (p === '/api/scan' && method === 'POST') {
         // Carte scannée par OCR sur le téléphone (ou numéro saisi à la main) : aucune IA

@@ -68,11 +68,15 @@ const tcgdexHandler = (req, res) => {
   tcgdexCalls.push(req.url);
   if (tcgdexDown) { res.writeHead(500); return res.end('{}'); }
   const u = req.url;
-  if (u === '/v2/fr/sets') return json(res, 200, [{ id: 'base1', name: 'Set de Base', cardCount: { total: 102, official: 102 } }, { id: 'setA', name: 'Set A', cardCount: { total: 99, official: 99 } }, { id: 'setB', name: 'Set B', cardCount: { total: 99, official: 99 } }, { id: 'fossil1', name: 'Fossile', cardCount: { total: 62, official: 62 } }]);
+  if (u === '/v2/fr/sets') return json(res, 200, [{ id: 'base1', name: 'Set de Base', cardCount: { total: 102, official: 102 } }, { id: 'setA', name: 'Set A', cardCount: { total: 99, official: 99 } }, { id: 'setB', name: 'Set B', cardCount: { total: 99, official: 99 } }, { id: 'fossil1', name: 'Fossile', cardCount: { total: 62, official: 62 } }, { id: 'hskit', name: 'HS Kit du dresseur (Raichu)', cardCount: { total: 30, official: 30 } }, { id: 'm30', name: 'Pokémon 30 ans', cardCount: { total: 128, official: 128 } }]);
   if (u === '/v2/fr/sets/base1') return json(res, 200, { id: 'base1', cards: [{ id: 'base1-4', localId: '4', name: 'Dracaufeu' }, { id: 'base1-58', localId: '58', name: 'Pikachu' }] });
   if (u === '/v2/fr/sets/setA') return json(res, 200, { id: 'setA', cards: [{ id: 'setA-7', localId: '7', name: 'Machin' }] });
   if (u === '/v2/fr/sets/setB') return json(res, 200, { id: 'setB', cards: [{ id: 'setB-7', localId: '007', name: 'Truc-EX' }] });
   if (u === '/v2/fr/sets/fossil1') return json(res, 200, { id: 'fossil1', cards: [{ id: 'fossil1-21', localId: '21', name: 'Spectrum' }] });
+  if (u === '/v2/fr/sets/hskit') return json(res, 200, { id: 'hskit', cards: [{ id: 'hskit-16', localId: '16', name: 'Pikachu' }] });
+  if (u === '/v2/fr/sets/m30') return json(res, 200, { id: 'm30', cards: [{ id: 'm30-38', localId: '038', name: 'Pikachu' }] });
+  if (u === '/v2/fr/cards/hskit-16') return json(res, 200, dexCard('hskit-16', '16', 'Pikachu', 12.04));
+  if (u === '/v2/fr/cards/m30-38') return json(res, 200, dexCard('m30-38', '038', 'Pikachu', 3.5));
   if (u === '/v2/fr/cards/fossil1-21') return json(res, 200, dexCard('fossil1-21', '21', 'Spectrum', 36.35));
   if (u === '/v2/fr/cards/base1-4') return json(res, 200, dexCard('base1-4', '4', 'Dracaufeu', 80));
   if (u === '/v2/fr/cards/base1-58') return json(res, 200, dexCard('base1-58', '58', 'Pikachu', 3));
@@ -223,6 +227,77 @@ const test = (name, fn) => tests.push({ name, fn });
         assert.equal(by[22].deal, null, 'aucune preuve (nom ou extension) : rien');
         assert.equal(by[23].deal, null, 'deux cartes possibles : rien');
       } finally { tcgdexDown = false; }
+    });
+  });
+
+  test('Marge : détail du calcul, décote réglable, prix de référence saisi à la main', async () => {
+    const core = mk();
+    let j = await core.api('/api/recent?q=carte+pokemon');
+    let d = j.items.find((i) => i.id === 1).deal;
+    // achat 21,4 + port 3 = 24,4 ; revente 80 × (1 − 10 %) × (1 − 5 %) = 68,4 ; marge 44
+    assert.deepEqual([d.paid, d.ship, d.cost, d.sell, d.margin, d.source], [21.4, 3, 24.4, 68.4, 44, 'cardmarket']);
+    await core.api('/api/settings', 'POST', { haircut: 0 });
+    j = await core.api('/api/recent?q=carte+pokemon');
+    d = j.items.find((i) => i.id === 1).deal;
+    assert.deepEqual([d.sell, d.margin], [76, 51.6]);
+    // prix saisi à la main (ex. Cardmarket FR near mint, ventes eBay) : remplace le prix Cardmarket, sans décote
+    await core.api('/api/ref', 'POST', { key: j.items.find((i) => i.id === 1).refKey, price: 50 });
+    j = await core.api('/api/recent?q=carte+pokemon');
+    d = j.items.find((i) => i.id === 1).deal;
+    assert.deepEqual([d.source, d.market, d.sell, d.margin], ['manuel', 50, 47.5, 23.1]);
+    const exp = await core.api('/api/export');
+    assert.equal(exp.state.refPrices['4/102'], 50);
+    await core.api('/api/ref', 'POST', { key: '4/102', price: 0 });
+    j = await core.api('/api/recent?q=carte+pokemon');
+    assert.equal(j.items.find((i) => i.id === 1).deal.source, 'cardmarket');
+    await assert.rejects(core.api('/api/ref', 'POST', { price: 5 }), /Carte inconnue/);
+  });
+
+  test('Score : toujours là, ou une raison explicite ; prix manuel possible sur une carte non identifiée', async () => {
+    await withItems([
+      [61, 'Lot 50 cartes pokemon'],
+      [62, 'Dracaufeu 4/102 PSA 9'],
+      [63, 'Pikachu holo rare'],
+      [64, 'Carte neuve 4/102'],
+      [65, 'Dracaufeu 4/102'],
+    ], async () => {
+      const core = mk();
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      let j = await core.api('/api/recent?q=x');
+      const by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.match(by[61].scoreReason, /lot de 50 cartes/);
+      assert.match(by[62].scoreReason, /gradée/);
+      assert.match(by[63].scoreReason, /pas de numéro/);
+      assert.match(by[64].scoreReason, /non identifiée/);
+      assert.equal(by[65].scoreReason, '');
+      assert.ok(by[65].deal);
+      assert.ok(j.items.every((i) => i.deal || i.scoreReason), 'chaque annonce a un score ou une raison');
+      // prix de revente saisi à la main sur une annonce non identifiée : score calculé
+      await core.api('/api/ref', 'POST', { key: by[63].refKey, price: 20 });
+      j = await core.api('/api/recent?q=x');
+      const d = j.items.find((i) => i.id === 63).deal;
+      assert.equal(d.source, 'manuel');
+      assert.equal(d.margin, 11); // 20 × 0,95 − (5 + 3)
+    });
+  });
+
+  test('Recoupe numéro du titre / numéros imprimés sur la carte (badge 16/30 vs 038/128)', async () => {
+    const PIKA_TEXT = 'Pikachu PV 60\nÉtincelle Ciblée Cette attaque inflige 20 dégâts\nFaiblesse x2 Résistance Retraite\n038/128 16/30';
+    await withItems([[71, 'Pikachu 16/30 Pokémon 30 ans', 'http://x/pika/71.jpg']], async () => {
+      // sans OCR : le titre seul identifie la carte du kit HS (12,04 €)
+      let core = mk();
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      let d = (await core.api('/api/recent?q=x')).items[0].deal;
+      assert.equal(d.market, 12.04);
+      // avec OCR : la carte porte aussi 038/128 (extension « Pokémon 30 ans ») : plus grand total retenu, signalé moins sûr
+      core = mk({ ocr: async () => PIKA_TEXT });
+      await core.api('/api/settings', 'POST', { frMode: 'off' });
+      const j = await settle(core);
+      d = j.items[0].deal;
+      assert.equal(d.market, 3.5);
+      assert.match(d.matched, /Pokémon 30 ans 038\/128/);
+      assert.equal(d.unverified, true);
+      assert.equal(j.items[0].refKey, '38/128');
     });
   });
 

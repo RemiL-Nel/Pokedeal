@@ -52,6 +52,9 @@ main{padding:12px}
 .deal{font-size:12px;font-weight:700;border-radius:6px;padding:3px 7px;margin-top:3px}
 .deal.top{background:rgba(53,194,122,.16);color:var(--ok)}
 .deal.good{background:rgba(255,203,5,.14);color:var(--acc)}
+.deal.none{background:rgba(255,255,255,.06);color:var(--mut);font-weight:600}
+.refrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.ref{font-size:11px;font-weight:600;color:var(--mut);background:transparent;border:1px solid var(--line);border-radius:8px;padding:4px 7px;text-decoration:none;font-family:inherit}
 .over-tag{font-size:11px;color:var(--bad);font-weight:700}
 .btns2{display:flex;gap:6px;margin-top:auto;padding-top:8px}
 .btns2 .buy,.btns2 .add{flex:1;text-align:center;text-decoration:none;border-radius:8px;padding:9px 4px;font-weight:700;font-size:13px;border:0}
@@ -208,7 +211,9 @@ a.link{color:var(--acc2)}
       <div class="two">
         <div style="flex:1"><label for="sShip">Port moyen à l'achat (€)</label><input id="sShip" class="field" type="number" inputmode="decimal" step="0.1"></div>
         <div style="flex:1"><label for="sFee">Commission revente (%)</label><input id="sFee" class="field" type="number" inputmode="decimal" step="0.5"></div>
+        <div style="flex:1"><label for="sCut">Décote prix marché (%)</label><input id="sCut" class="field" type="number" inputmode="decimal" step="1"></div>
       </div>
+      <div class="note">Revente nette = prix Cardmarket × (1 − décote) × (1 − commission). La décote couvre l'écart entre la tendance (toutes langues, tous états) et le prix réel d'une carte française near mint ; ajuste-la d'après tes ventes.</div>
       <label for="sTg">Telegram (optionnel) : token du bot <span id="sTgState"></span></label>
       <input id="sTg" class="field" type="password" autocomplete="off">
       <label for="sChat">Telegram : chat id</label>
@@ -371,17 +376,27 @@ function itemEl(it){
     const L = {fr: '🇫🇷 FR' + (it.langSrc === 'photo' ? ' (photo, IA)' : it.langSrc === 'ocr' ? ' (lu sur la photo)' : it.langSrc === 'nom' ? ' (nom français)' : ''), other: 'Autre langue', unknown: 'langue non vérifiée'}[it.lang] || '';
     if (L) meta.appendChild(tag('div', 'sm', L));
   }
-  if (d && d.level !== 'none') {
-    meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
-    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.unverified ? 'nom absent du titre, vérifie la carte · ' : '') + 'estimation, vérifie langue et état'));
-  } else if (d) {
-    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + 'Cardmarket ~' + fmt(d.market) + ' · prix ' + (d.gap > 0 ? '+' : '') + d.gap + ' % vs marché · marge ' + sgn(d.margin) + ' · score ' + d.score + '/100'));
-  } else if (it.lot) {
-    meta.appendChild(tag('div', 'sm', 'Lot de ' + it.lot.count + ' cartes · ' + fmt(it.lot.perCard) + ' / carte'));
-  } else if (it.graded) {
-    meta.appendChild(tag('div', 'sm', 'Carte gradée : prix à vérifier à la main'));
+  if (d) {
+    const icon = d.level === 'top' ? '🔥 ' : d.level === 'good' ? '👍 ' : '';
+    meta.appendChild(tag('div', 'deal ' + d.level, icon + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin)));
+    meta.appendChild(tag('div', 'sm', 'Achat ' + fmt(d.paid) + ' + port ' + fmt(d.ship) + ' = ' + fmt(d.cost) + ' · revente nette ~' + fmt(d.sell)));
+    meta.appendChild(tag('div', 'sm', (d.source === 'manuel' ? 'Ton prix de référence ' : 'Cardmarket (tendance) ') + fmt(d.market) + ' · prix payé ' + (d.gap > 0 ? '+' : '') + d.gap + ' % vs réf.'));
+    if (d.source !== 'manuel') meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.unverified ? 'identification moins sûre, vérifie la carte · ' : '') + 'toutes langues et états confondus'));
   } else {
-    meta.appendChild(tag('div', 'sm', [it.status, it.seller].filter(Boolean).join(' · ')));
+    meta.appendChild(tag('div', 'deal none', 'Score — · ' + (it.scoreReason || 'indisponible')));
+    if (it.lot) meta.appendChild(tag('div', 'sm', 'Lot de ' + it.lot.count + ' cartes · ' + fmt(it.lot.perCard) + ' / carte'));
+    else meta.appendChild(tag('div', 'sm', [it.status, it.seller].filter(Boolean).join(' · ')));
+  }
+  // Vérification à la main : Cardmarket FR near mint / ventes eBay réalisées, puis saisie du prix de référence
+  if (!it.isLot && !it.graded) {
+    const q = encodeURIComponent(it.refSearch || it.title);
+    const vr = tag('div', 'refrow');
+    const cm = tag('a', 'ref', 'Cardmarket ↗'); cm.href = 'https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=' + q; cm.target = '_blank'; cm.rel = 'noopener';
+    const eb = tag('a', 'ref', 'eBay vendus ↗'); eb.href = 'https://www.ebay.fr/sch/i.html?_nkw=' + q + '&LH_Sold=1&LH_Complete=1'; eb.target = '_blank'; eb.rel = 'noopener';
+    const me = tag('button', 'ref', d && d.source === 'manuel' ? 'Mon prix ✎' : 'Mon prix');
+    me.addEventListener('click', () => setRef(it, d));
+    vr.append(cm, eb, me);
+    meta.appendChild(vr);
   }
   if (over) meta.appendChild(tag('div', 'over-tag', 'Hors budget'));
 
@@ -398,6 +413,14 @@ function itemEl(it){
   return box;
 }
 
+async function setRef(it, d){
+  const cur = d && d.source === 'manuel' ? String(d.market).replace('.', ',') : '';
+  const v = prompt('Prix de revente de référence en € (Cardmarket FR near mint le moins cher, ou ventes eBay réalisées). Vide ou 0 = effacer.\nLe score est recalculé avec ce prix, sans décote.', cur);
+  if (v === null) return;
+  const price = Number(String(v).replace(',', '.').trim() || 0);
+  if (!Number.isFinite(price) || price < 0) { alert('Prix invalide'); return; }
+  try{ await api('/api/ref', 'POST', {key: it.refKey, price}); toast(price > 0 ? 'Prix de référence enregistré' : 'Prix effacé'); load(); }catch(e){ alert('Erreur : ' + e.message); }
+}
 function render(){
   let list = items;
   if (onlyNew) list = list.filter(i => newIds.has(i.id));
@@ -547,11 +570,12 @@ function renderSettings(){
   $('#sTcgState').textContent = s.hasTcgKey ? '(enregistrée ✓)' : '';
   $('#sShip').value = s.shipIn ?? 3;
   $('#sFee').value = s.feeOut != null ? Math.round(s.feeOut * 1000) / 10 : 5;
+  $('#sCut').value = s.haircut ?? 10;
   $('#sLang').checked = !!s.langCheck;
   const fm = s.frMode || 'strict'; $('#chipFr').textContent = FR_LABEL[fm]; $('#chipFr').classList.toggle('on', fm !== 'off');
 }
 $('#sSave').onclick = async () => {
-  const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100, langCheck: $('#sLang').checked};
+  const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100, haircut: $('#sCut').value, langCheck: $('#sLang').checked};
   for (const [id, k] of [['#sKey', 'anthropicKey'], ['#sTg', 'tgToken'], ['#sChat', 'tgChat'], ['#sTcg', 'tcgKey']]) if ($(id).value.trim()) b[k] = $(id).value.trim();
   try{
     await api('/api/settings', 'POST', b);
