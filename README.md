@@ -42,7 +42,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ## Ce qu'il faut savoir
 
-- **Alertes en arrière-plan** : la surveillance tourne tant que l'appli est ouverte ou vient d'être mise de côté. Android suspend ensuite les applis inactives, donc ne compte pas dessus toute la nuit. Une surveillance fiable 24 h/24 demande un service dédié (ou le serveur de la v2 sur un PC allumé) ; je peux l'étudier.
+- **Alertes en arrière-plan** : quand la surveillance est activée (Stock › Alertes), l'appli lance un **service Android de premier plan** (notification discrète permanente « PokéDeals surveille Vinted ») + un wake-lock, ce qui garde la surveillance active écran éteint ou appli en fond. À faire une fois : appuie sur **Autoriser en arrière-plan** (exemption d'optimisation de batterie) et, sur Xiaomi/Samsung/OnePlus etc., mets la batterie de l'appli sur « Sans restriction ». Si tu fermes l'appli en la balayant, certains constructeurs tuent le service : laisse-la juste en arrière-plan. Coût : un peu plus de batterie. Non testé sur un vrai téléphone depuis le bac à sable.
 - **Non testé sur un vrai téléphone** : la logique est testée (tests automatiques, interface simulée, réponses au format Capacitor lues dans son code source), mais pas l'APK lui-même. Les points à surveiller au premier lancement : la liste Vinted se remplit, la caméra s'ouvre, une notification test arrive (Stock › Alertes › Notification test), le partage de la photo vers Vinted.
 - **Vinted** : pas d'API publique, le scraping est contraire à leurs CGU et peut être bloqué ou casser. Le paiement reste chez Vinted : « Acheter ↗ » ouvre l'annonce, tu valides toi-même.
 - **Score de bonne affaire (/100)** : calculé par formule, sans IA, **affiché sur chaque annonce** : soit le score, soit « Score — » avec la raison (lot, carte gradée, pas de numéro `n/total` dans le titre, carte non identifiée de façon sûre…).
@@ -61,7 +61,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ```bash
 npm ci
-npm test        # 30 tests de la logique embarquée (www/js/core.js)
+npm test        # 31 tests de la logique embarquée (www/js/core.js)
 ```
 
 Le projet Android n'est pas dans le dépôt : il est généré à chaque build par `npx cap add android`, puis ajusté par `scripts/patch-android.js` (permission caméra, pas de sauvegarde cloud).

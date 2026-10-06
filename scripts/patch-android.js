@@ -13,6 +13,22 @@ const add = (line, marker) => {
 add('<uses-permission android:name="android.permission.CAMERA" />', 'android.permission.CAMERA');
 add('<uses-feature android:name="android.hardware.camera" android:required="false" />', 'android.hardware.camera');
 x = x.replace('android:allowBackup="true"', 'android:allowBackup="false"');
+// surveillance en arrière-plan : service de premier plan + notifications + exemption batterie
+for (const perm of ['FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SPECIAL_USE', 'POST_NOTIFICATIONS', 'WAKE_LOCK', 'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS']) {
+  add(`<uses-permission android:name="android.permission.${perm}" />`, `android.permission.${perm}"`);
+}
+if (!x.includes('KeepAliveService')) {
+  x = x.replace('</application>', `    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Surveillance periodique des annonces Vinted pour alerter des bonnes affaires" />
+        </service>
+    </application>`);
+}
+// plugin natif + MainActivity
+const javaDir = path.join('android', 'app', 'src', 'main', 'java', 'fr', 'remi', 'pokedeals');
+fs.mkdirSync(javaDir, { recursive: true });
+for (const f of ['KeepAliveService.java', 'KeepAlivePlugin.java', 'MainActivity.java']) {
+  fs.copyFileSync(path.join(__dirname, 'android', f), path.join(javaDir, f));
+}
 fs.writeFileSync(manifest, x);
 
 const props = path.join('android', 'gradle.properties');

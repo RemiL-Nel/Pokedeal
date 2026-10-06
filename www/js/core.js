@@ -930,6 +930,7 @@
       clearTimeout(watchTimer);
       notified.clear();
       watchStatus.running = !!state.watch.enabled;
+      if (env.keepAlive) { try { env.keepAlive(watchStatus.running); } catch (e) { /* sans service natif : tant pis */ } }
       if (watchStatus.running) {
         const g = gen;
         watchTimer = setTimeout(() => watchTick(g), 300);

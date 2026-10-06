@@ -594,6 +594,14 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(st.sent, 1);
   });
 
+  test('Alertes : le service d\'arrière-plan suit l\'état de la surveillance', async () => {
+    const calls = [];
+    const core = mk({ keepAlive: (on) => calls.push(on), ensureNotifyPermission: async () => true });
+    await core.api('/api/watch', 'POST', { enabled: true, queries: ['carte pokemon'], intervalSec: 1 });
+    await core.api('/api/watch', 'POST', { enabled: false });
+    assert.deepEqual(calls, [true, false]);
+  });
+
   test('Alertes : permission de notification refusée => activation refusée', async () => {
     const core = mk({ ensureNotifyPermission: async () => false });
     await assert.rejects(core.api('/api/watch', 'POST', { enabled: true }), /notifications/);

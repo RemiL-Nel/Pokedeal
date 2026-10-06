@@ -213,7 +213,7 @@ a.link{color:var(--acc2)}
         <div style="flex:1"><label for="wInt">Toutes les (s)</label><input id="wInt" class="field" type="number" inputmode="numeric"></div>
       </div>
       <label class="check"><input type="checkbox" id="wDeals"> Seulement les bonnes affaires</label>
-      <div class="btns"><button class="btn" id="wSave">Enregistrer</button><button class="btn sec" id="wTest">Notification test</button></div>
+      <div class="btns"><button class="btn" id="wSave">Enregistrer</button><button class="btn sec" id="wTest">Notification test</button><button class="btn sec" id="wBat">Autoriser en arrière-plan</button></div>
       <div class="note" id="wStatus"></div>
     </div>
 
@@ -311,7 +311,11 @@ async function ocrFromDataUrl(dataUrl){
   const w = await FSP.writeFile({path: 'scan.jpg', data: dataUrl.split(',')[1], directory: 'CACHE'});
   return ocrFromUri(w.uri);
 }
+/* Service Android de premier plan : garde la surveillance vivante en arrière-plan */
+const KA = (() => { try{ return CAP && CAP.registerPlugin ? CAP.registerPlugin('KeepAlive') : plug('KeepAlive'); }catch(e){ return plug('KeepAlive'); } })();
+function keepAlive(on){ if (KA) (on ? KA.start() : KA.stop()).catch(() => {}); }
 const core = PDCore.createCore({
+  keepAlive: CAP ? keepAlive : undefined,
   ocr: TR && FSP ? ocrFromUrl : undefined,
   request: PDCore.makeRequest(window),
   storage: window.localStorage,
@@ -620,6 +624,14 @@ $('#wSave').onclick = async () => {
     await api('/api/watch', 'POST', {enabled: $('#wOn').checked, queries: $('#wQ').value.split('|').map(s => s.trim()).filter(Boolean), maxPrice: $('#wMax').value || null, onlyDeals: $('#wDeals').checked, intervalSec: Number($('#wInt').value) || 60});
     await loadState(); toast('Enregistré');
   }catch(e){ alert('Erreur : ' + e.message); await loadState(); }
+};
+$('#wBat').onclick = async () => {
+  if (!KA) { alert('Disponible uniquement dans l\'appli Android.'); return; }
+  try{
+    const r = await KA.batteryStatus();
+    if (r && r.ignoring) { toast('Déjà autorisé ✓'); return; }
+    await KA.requestIgnoreBattery();
+  }catch(e){ alert('Erreur : ' + e.message); }
 };
 $('#wTest').onclick = async () => {
   try{ if (!(await ensureNotifyPermission())) { alert('Autorise les notifications pour PokéDeals dans les réglages Android.'); return; } await api('/api/watch/test', 'POST', {}); toast('Notification envoyée'); }catch(e){ alert('Erreur : ' + e.message); }
