@@ -12,6 +12,7 @@ const vintedItems = [
 ];
 const telegramSent = [];
 const claudeCalls = [];
+const langCalls = [];
 
 function listen(handler) {
   return new Promise((resolve) => {
@@ -41,6 +42,11 @@ const claudeHandler = async (req, res) => {
   const b = JSON.parse(await readBody(req));
   claudeCalls.push(b);
   const txt = JSON.stringify(b.messages);
+  if (txt.includes('un seul mot') || txt.includes('UN seul mot')) {
+    langCalls.push({ model: b.model, url: b.messages[0].content[0].source.url });
+    const u = b.messages[0].content[0].source.url;
+    return json(res, 200, { content: [{ type: 'text', text: u.includes('/en/') ? 'EN' : u.includes('/blur/') ? 'INCONNU' : u.includes('/fail/') ? 'FR' : 'FR' }] });
+  }
   assert.ok(txt.includes('"type":"image"'), "l'identification doit envoyer une image");
   return json(res, 200, { content: [{ type: 'text', text: '{"name":"Charizard","name_fr":"Dracaufeu","set":"Base Set","number":"4/102","language":"FR","rarity":"Rare Holo","condition":"Bon état","condition_notes":"léger blanchiment"}' }] });
 };
@@ -213,6 +219,70 @@ const test = (name, fn) => tests.push({ name, fn });
     const n = tcgdexCalls.length;
     await core.api('/api/recent?q=b');
     assert.equal(tcgdexCalls.length, n, 'deuxième rafraîchissement : aucun nouvel appel TCGdex');
+  });
+
+  test('Langue : titre explicite, nom français, puis photo (IA) seulement si nécessaire', async () => {
+    const saved = vintedItems.slice();
+    vintedItems.length = 0;
+    const mkItem = (id, title, photo = 'http://x/' + id + '.jpg') => ({ id, title, price: { amount: '5.0' }, photo: { url: photo }, user: { login: 'u' + id } });
+    vintedItems.push(mkItem(31, 'Dracaufeu 4/102 FR'));                    // FR dans le titre
+    vintedItems.push(mkItem(32, 'Dracaufeu 4/102 version anglaise'));      // anglais dans le titre
+    vintedItems.push(mkItem(33, 'Carte neuve 4/102', 'http://x/en/33.jpg')); // rien dans le titre, photo anglaise
+    vintedItems.push(mkItem(34, 'Carte neuve 58/102', 'http://x/fr/34.jpg')); // rien dans le titre, photo française
+    vintedItems.push(mkItem(35, 'Dracaufeu 4/102 neuf'));                  // nom français dans le titre
+    vintedItems.push(mkItem(36, 'Carte neuve 4/102 EN'));                  // code EN
+    vintedItems.push(mkItem(37, 'CARTE NEUVE EN POCHETTE 4/102'));         // titre en majuscules : « EN » est du français ici
+    try {
+      // sans clé : pas d'appel IA, la langue vient du titre
+      langCalls.length = 0;
+      let j = await mk().api('/api/recent?q=x');
+      let by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(langCalls.length, 0);
+      assert.equal(by[31].lang, 'fr');
+      assert.equal(by[35].lang, 'fr'); assert.equal(by[35].langSrc, 'nom');
+      assert.equal(by[32], undefined, 'anglaise dans le titre : masquée');
+      assert.equal(by[36], undefined, 'EN : masquée');
+      assert.equal(by[33].lang, 'unknown');
+      assert.ok(by[37], 'EN en majuscules dans un titre tout en majuscules : pas une langue');
+      assert.equal(j.hiddenOther, 2);
+      // avec clé + vérification photo : seules les annonces sans indice partent à l'IA, modèle économique
+      const core = mk();
+      await core.api('/api/settings', 'POST', { anthropicKey: 'sk-test', langCheck: true });
+      j = await core.api('/api/recent?q=x');
+      by = Object.fromEntries(j.items.map((i) => [i.id, i]));
+      assert.equal(by[33], undefined, 'photo en anglais : masquée');
+      assert.equal(by[34].lang, 'fr'); assert.equal(by[34].langSrc, 'photo');
+      const urls = langCalls.map((c) => c.url);
+      assert.ok(urls.includes('http://x/en/33.jpg') && urls.includes('http://x/fr/34.jpg'));
+      assert.ok(!urls.some((u) => /\/(31|32|35|36)\.jpg$/.test(u)), 'pas de photo envoyée quand le titre ou le nom suffit');
+      assert.ok(langCalls.every((c) => /haiku/.test(c.model)));
+      const n = langCalls.length;
+      await core.api('/api/recent?q=x');
+      assert.equal(langCalls.length, n, 'résultat mis en cache : pas de nouvel appel');
+      // FR seulement désactivé : tout revient
+      await core.api('/api/settings', 'POST', { frOnly: false });
+      j = await core.api('/api/recent?q=x');
+      assert.ok(j.items.find((i) => i.id === 33) && j.items.find((i) => i.id === 32));
+    } finally {
+      vintedItems.length = 0;
+      vintedItems.push(...saved);
+    }
+  });
+
+  test('Langue : mauvaise clé => annonces conservées, erreur signalée', async () => {
+    const saved = vintedItems.slice();
+    vintedItems.length = 0;
+    vintedItems.push({ id: 41, title: 'Carte neuve 4/102', price: { amount: '5.0' }, photo: { url: 'http://x/41.jpg' }, user: { login: 'a' } });
+    try {
+      const core = mk();
+      await core.api('/api/settings', 'POST', { anthropicKey: 'mauvaise', langCheck: true });
+      const j = await core.api('/api/recent?q=x');
+      assert.equal(j.items.length, 1);
+      assert.match(j.langError, /401/);
+    } finally {
+      vintedItems.length = 0;
+      vintedItems.push(...saved);
+    }
   });
 
   test('Chemin natif Android : cookies en chaîne jointe, jeton lu depuis set-cookie', async () => {

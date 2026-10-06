@@ -91,7 +91,7 @@
         storage.setItem(k, JSON.stringify(v));
       } catch {}
     };
-    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05 });
+    const defSettings = () => ({ anthropicKey: '', model: 'claude-sonnet-5-5', tgToken: '', tgChat: '', tcgKey: '', shipIn: 3, feeOut: 0.05, frOnly: true, langCheck: false, langModel: 'claude-haiku-4-5-20251001' });
     const defState = () => ({
       watch: { enabled: false, queries: ['carte pokemon'], maxPrice: null, onlyDeals: true, intervalSec: 60 },
       budget: { monthly: 0 },
@@ -343,12 +343,12 @@
     const analysisCache = new Map();
     const MAX_LOOKUPS = 25; // appels pokemontcg.io par passage (le reste est traité au passage suivant)
 
-    async function claude(content, maxTokens, timeout = 40000) {
+    async function claude(content, maxTokens, timeout = 40000, model) {
       const r = await request(ANTHROPIC_BASE + '/v1/messages', {
         method: 'POST',
         timeout,
         headers: { 'x-api-key': settings.anthropicKey, 'anthropic-version': '2023-06-01' },
-        json: { model: settings.model || 'claude-sonnet-5-5', max_tokens: maxTokens, messages: [{ role: 'user', content }] },
+        json: { model: model || settings.model || 'claude-sonnet-5-5', max_tokens: maxTokens, messages: [{ role: 'user', content }] },
       });
       if (!r.ok) {
         let detail = '';
@@ -384,12 +384,77 @@
       const graded = GRADED_RE.test(t);
       const foreign = FOREIGN_RE.test(t);
       const reverse = /\b(reverse|rev\.? ?holo)\b/.test(t);
-      const out = { single: false, lot, graded, foreign, reverse, lotCount: lotCount || null };
+      const out = { single: false, lot, graded, foreign, reverse, lotCount: lotCount || null, lang: titleLang(title) };
       if (uniq.size === 1 && !lot && !graded && !foreign) {
         const x = [...uniq.values()][0];
         Object.assign(out, { single: true, number: String(x.n), total: x.tot });
       }
       return out;
+    }
+
+    /* ---------- Langue de la carte ---------- */
+    const OTHER_LANG_WORDS = /\b(english|anglais|anglaise|japonais|japonaise|japanese|jap|jpn|korean|coreen|coreenne|allemand|allemande|deutsch|german|espagnol|espagnole|spanish|italien|italienne|italian|portugais|portugaise|chinois|chinoise|chinese|thai)\b/;
+    const OTHER_LANG_CODES = new Set(['EN', 'ENG', 'JP', 'JPN', 'KR', 'KO', 'DE', 'ES', 'IT', 'PT', 'ZH', 'CN', 'TH']);
+    // Lit la langue annoncée dans le titre : 'fr', 'other' ou 'unknown' (la plupart des vendeurs ne la précisent pas)
+    function titleLang(title) {
+      const raw = String(title || '');
+      const plainT = plain(raw);
+      const letters = raw.replace(/[^A-Za-zÀ-ÿ]/g, '');
+      const mostlyUpper = letters.length > 6 && letters.replace(/[^A-ZÀ-Þ]/g, '').length / letters.length > 0.7;
+      const fr = /\b(fr|fra|vf|francais|francaise|francaises)\b/.test(plainT);
+      let other = OTHER_LANG_WORDS.test(plainT);
+      if (!other && !mostlyUpper) other = raw.split(/[^A-Za-z]+/).some((w) => OTHER_LANG_CODES.has(w));
+      return fr && !other ? 'fr' : other && !fr ? 'other' : 'unknown';
+    }
+
+    const langCache = new Map(); // id d'annonce -> { v: 'fr'|'other'|'unknown', tries }
+    let langCooldownUntil = 0;
+    let lastLangError = null;
+    const langCheckOn = () => !!(settings.langCheck && settings.anthropicKey);
+    const LANG_MAX = 8; // vérifications de photo par passage
+
+    // Langue retenue : titre explicite > photo (IA) > nom français dans le titre > inconnue
+    function langOf(it, a) {
+      const t = a && a.lang;
+      if (t === 'fr' || t === 'other') return { lang: t, src: 'titre' };
+      const c = langCache.get(it.id);
+      if (c && c.v !== 'unknown') return { lang: c.v, src: 'photo' };
+      if (a && a.market && a.market.nameChecked) return { lang: 'fr', src: 'nom' };
+      return { lang: 'unknown', src: '' };
+    }
+    const needsLangCheck = (it, a) => !!(a && a.single && langCheckOn() && it.photo && langOf(it, a).lang === 'unknown' && (langCache.get(it.id) || { tries: 0 }).tries < 2);
+
+    async function checkLangPhoto(it) {
+      const entry = langCache.get(it.id) || { v: 'unknown', tries: 0 };
+      langCache.set(it.id, entry);
+      entry.tries++;
+      const text = await claude(
+        [
+          { type: 'image', source: { type: 'url', url: it.photo } },
+          { type: 'text', text: "Photo d'une annonce Vinted pour une carte Pokémon. Quelle est la langue du texte imprimé sur la carte (nom, capacités, bas de carte) ? Réponds par UN seul mot : FR, EN, JP, DE, ES, IT, KO, ZH, PT, AUTRE, ou INCONNU si la photo ne permet pas de lire la carte (floue, plusieurs cartes, dos de carte)." },
+        ],
+        10,
+        30000,
+        settings.langModel || 'claude-haiku-4-5-20251001'
+      );
+      const w = (/[A-Za-z]+/.exec(text) || [''])[0].toUpperCase();
+      entry.v = w === 'FR' ? 'fr' : ['EN', 'JP', 'DE', 'ES', 'IT', 'KO', 'ZH', 'PT', 'AUTRE'].includes(w) ? 'other' : 'unknown';
+    }
+
+    async function checkLanguages(items) {
+      if (!langCheckOn() || Date.now() < langCooldownUntil) return;
+      const todo = items.filter((it) => needsLangCheck(it, analysisCache.get(it.id))).slice(0, LANG_MAX);
+      if (!todo.length) return;
+      await pool(todo, 3, async (it) => {
+        try {
+          await checkLangPhoto(it);
+          lastLangError = null;
+        } catch (e) {
+          lastLangError = e.message;
+          langCooldownUntil = Date.now() + 60000;
+        }
+      });
+      if (langCache.size > 3000) [...langCache.keys()].slice(0, 800).forEach((k) => langCache.delete(k));
     }
 
     async function analyzeItems(items) {
@@ -403,11 +468,12 @@
         if (v === undefined) a.tries++;
         else a.market = v;
       });
+      await checkLanguages(items);
       if (analysisCache.size > 3000) [...analysisCache.keys()].slice(0, 800).forEach((k) => analysisCache.delete(k));
     }
 
     // Une annonce est « prête » quand son prix de référence est connu (ou inutile).
-    const isReady = (a) => !!a && (!a.single || a.market !== undefined || a.tries >= 3);
+    const isReady = (a, it) => !!a && (!a.single || a.market !== undefined || a.tries >= 3) && !(it && needsLangCheck(it, a));
 
     /* Formule de score
      *   coût       = prix payé (frais Vinted inclus) + frais d'envoi de ta revente d'achat
@@ -440,7 +506,8 @@
       const m = a && a.market;
       const analysis = a && a.single ? { name: m ? m.name : '', number: `${a.number}/${a.total}`, set: m ? m.set : '' } : null;
       const lot = a && a.lotCount && it.price != null ? { count: a.lotCount, perCard: r2((it.totalPrice != null ? it.totalPrice : it.price) / a.lotCount) } : null;
-      return { ...it, analysis, lot, graded: !!(a && a.graded), deal: dealFor(it, a) };
+      const lg = langOf(it, a);
+      return { ...it, analysis, lot, graded: !!(a && a.graded), lang: lg.lang, langSrc: lg.src, deal: dealFor(it, a) };
     }
 
     /* ---------- Identification d'une carte photographiée ---------- */
@@ -623,8 +690,9 @@
             notified.add(it.id);
             continue;
           }
-          if (!isReady(analysisCache.get(it.id))) continue; // prix de référence pas encore connu : au prochain passage
+          if (!isReady(analysisCache.get(it.id), it)) continue; // prix de référence pas encore connu : au prochain passage
           notified.add(it.id);
+          if (settings.frOnly && langOf(it, analysisCache.get(it.id)).lang === 'other') continue; // pas une carte française
           const d = dealFor(it, analysisCache.get(it.id));
           if (w.onlyDeals && !(d && d.level !== 'none')) continue;
           const t = dealTexts(it, d);
@@ -691,7 +759,9 @@
         const queries = (url.searchParams.get('q') || 'carte pokemon').split('|').map((s) => s.trim()).filter(Boolean);
         const items = await searchMany(queries.length ? queries : ['carte pokemon'], { min: url.searchParams.get('min'), max: url.searchParams.get('max') });
         await analyzeItems(items);
-        return { items: items.map(decorate), fetchedAt: Date.now(), scoring: true };
+        const all = items.map(decorate);
+        const kept = settings.frOnly ? all.filter((i) => i.lang !== 'other') : all;
+        return { items: kept, hiddenOther: all.length - kept.length, fetchedAt: Date.now(), scoring: true, langError: lastLangError };
       }
       if (p === '/api/state' && method === 'GET') {
         return {
@@ -700,7 +770,7 @@
           budget: state.budget,
           inventory: state.inventory,
           stats: stats(),
-          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut },
+          settings: { hasAnthropicKey: !!settings.anthropicKey, hasTelegram: canTelegram(), hasTcgKey: !!settings.tcgKey, model: settings.model, shipIn: settings.shipIn, feeOut: settings.feeOut, frOnly: !!settings.frOnly, langCheck: !!settings.langCheck },
           config: { canIdentify: canIdentify(), canScore: true, canNotify: true, canTelegram: canTelegram() },
         };
       }
@@ -708,6 +778,7 @@
         const b = body || {};
         for (const k of ['anthropicKey', 'tgToken', 'tgChat', 'tcgKey', 'model']) if (typeof b[k] === 'string' && b[k].trim()) settings[k] = b[k].trim();
         for (const k of Array.isArray(b.clear) ? b.clear : []) if (['anthropicKey', 'tgToken', 'tgChat', 'tcgKey'].includes(k)) settings[k] = '';
+        for (const k of ['frOnly', 'langCheck']) if (typeof b[k] === 'boolean') settings[k] = b[k];
         if (b.shipIn != null && b.shipIn !== '') settings.shipIn = r2(Math.max(0, num(b.shipIn, 3)));
         if (b.feeOut != null && b.feeOut !== '') settings.feeOut = Math.min(0.5, Math.max(0, num(b.feeOut, 0.05)));
         saveSettings();

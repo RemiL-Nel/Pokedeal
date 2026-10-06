@@ -49,6 +49,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
   `coût = prix payé (frais Vinted inclus) + port d'achat` · `revente = prix Cardmarket × 0,9 (décote prudente) × (1 − commission)` · `marge = revente − coût` · `score = marge / coût × 50`, borné à 0-100 (🔥 : score ≥ 50 et marge ≥ 5 € ; 👍 : score ≥ 25 et marge ≥ 2 €).
   Un score de 0 veut dire « pas de marge » : c'est le cas de la plupart des annonces, vendues au prix du marché. L'écart affiché (« prix +12 % vs marché ») dit à quel point.
   Limites : il faut un numéro `n/total` dans le titre ; lots, cartes gradées et japonaises ne sont pas scorés ; le prix est celui de Cardmarket toutes langues et l'état réel compte. Regarde toujours les photos avant d'acheter.
+- **Langue (cartes françaises seulement)** : le bouton « 🇫🇷 FR seulement » (actif par défaut, aussi pour les alertes) masque les annonces d'une autre langue. Ordre de décision : (1) langue écrite dans le titre (FR, française / EN, anglais, japonais…) ; (2) photo analysée par l'IA, **seulement si tu actives l'option dans Réglages** (clé Anthropic requise, modèle économique Haiku, uniquement pour les annonces de carte sans indice de langue, résultat mis en cache) ; (3) nom français de la carte dans le titre (« Dracaufeu »), pris comme indice de carte française. Sans l'option photo, une annonce « Carte neuve 4/102 » sans aucun indice reste affichée avec « langue non vérifiée ».
 - **API Vinted** : depuis septembre 2026, Vinted a remplacé `/api/v2/catalog/items` par `api.vinted.fr/svc-catalogue/items` avec un jeton anonyme. L'appli utilise le nouvel endpoint ; s'il change encore, la liste affichera l'erreur reçue.
 - **Sauvegarde** : stock et budget sont stockés sur le téléphone. Utilise Stock › Réglages › Exporter avant de désinstaller. Les clés API ne sont pas incluses dans l'export. La sauvegarde cloud Android est désactivée pour que les clés ne partent pas chez Google.
 - L'icône est celle par défaut de Capacitor.
@@ -57,7 +58,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ```bash
 npm ci
-npm test        # 18 tests de la logique embarquée (www/js/core.js)
+npm test        # 20 tests de la logique embarquée (www/js/core.js)
 ```
 
 Le projet Android n'est pas dans le dépôt : il est généré à chaque build par `npx cap add android`, puis ajusté par `scripts/patch-android.js` (permission caméra, pas de sauvegarde cloud).

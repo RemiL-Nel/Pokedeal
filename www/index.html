@@ -110,6 +110,7 @@ a.link{color:var(--acc2)}
     <span class="chip" id="chipSound">Son : off</span>
     <span class="chip" id="chipOnlyNew">Nouvelles</span>
     <span class="chip" id="chipDeals">Bonnes affaires</span>
+    <span class="chip on" id="chipFr">🇫🇷 FR seulement</span>
     <span class="chip" id="chipSort">Tri : score</span>
     <span class="chip" id="chipVariants">+ variantes</span>
   </div>
@@ -193,6 +194,7 @@ a.link{color:var(--acc2)}
       <h3>Réglages</h3>
       <label for="sKey">Clé API Anthropic (optionnelle, seulement pour identifier une carte par photo dans « Vendre ») <span id="sKeyState"></span></label>
       <input id="sKey" class="field" type="password" autocomplete="off" placeholder="sk-ant-…">
+      <label class="check"><input type="checkbox" id="sLang"> Vérifier la langue sur la photo (IA Anthropic, payant, nécessite la clé ci-dessus). Sans ça, la langue vient du titre.</label>
       <div class="two">
         <div style="flex:1"><label for="sShip">Port moyen à l'achat (€)</label><input id="sShip" class="field" type="number" inputmode="decimal" step="0.1"></div>
         <div style="flex:1"><label for="sFee">Commission revente (%)</label><input id="sFee" class="field" type="number" inputmode="decimal" step="0.5"></div>
@@ -334,6 +336,10 @@ function itemEl(it){
   if (it.totalPrice) price.appendChild(tag('small', '', fmt(it.totalPrice) + ' avec frais'));
   meta.appendChild(price);
   meta.appendChild(tag('div', 'ttl', it.title));
+  if (it.analysis) {
+    const L = {fr: '🇫🇷 FR' + (it.langSrc === 'photo' ? ' (photo)' : it.langSrc === 'nom' ? ' (nom français)' : ''), other: 'Autre langue', unknown: 'langue non vérifiée'}[it.lang] || '';
+    if (L) meta.appendChild(tag('div', 'sm', L));
+  }
   if (d && d.level !== 'none') {
     meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
     meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.unverified ? 'nom absent du titre, vérifie la carte · ' : '') + 'estimation, vérifie langue et état'));
@@ -393,7 +399,7 @@ async function load(){
     render();
     if (fresh) { if (sound) beep(); if (navigator.vibrate) navigator.vibrate(120); }
     const deals = items.filter(i => i.deal && i.deal.level !== 'none').length;
-    $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
+    $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + (j.hiddenOther ? ` · ${j.hiddenOther} masquée(s) (autre langue)` : '') + (j.langError ? ' · vérif. langue indisponible' : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
   }catch(e){
     $('#dot').classList.remove('live'); $('#err').style.display = 'block'; $('#err').textContent = 'Erreur : ' + e.message;
   }finally{ loading = false; }
@@ -407,6 +413,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 $('#chipLive').onclick = e => { live = !live; e.target.classList.toggle('on', live); schedule(); };
 $('#chipSound').onclick = e => { sound = !sound; e.target.classList.toggle('on', sound); e.target.textContent = 'Son : ' + (sound ? 'on' : 'off'); if (sound) beep(); };
 $('#chipOnlyNew').onclick = e => { onlyNew = !onlyNew; e.target.classList.toggle('on', onlyNew); render(); };
+$('#chipFr').onclick = async () => { const on = !((app.settings || {}).frOnly); try{ await api('/api/settings', 'POST', {frOnly: on}); await loadState(); firstLoad = true; seen.clear(); newIds.clear(); load(); }catch(e){ alert('Erreur : ' + e.message); } };
 $('#chipSort').onclick = e => { sortScore = !sortScore; e.target.classList.toggle('on', sortScore); render(); };
 $('#chipDeals').onclick = e => { onlyDeals = !onlyDeals; e.target.classList.toggle('on', onlyDeals); render(); };
 $('#chipVariants').onclick = () => { $('#q').value = VARIANTS; refilter(); };
@@ -502,9 +509,11 @@ function renderSettings(){
   $('#sTcgState').textContent = s.hasTcgKey ? '(enregistrée ✓)' : '';
   $('#sShip').value = s.shipIn ?? 3;
   $('#sFee').value = s.feeOut != null ? Math.round(s.feeOut * 1000) / 10 : 5;
+  $('#sLang').checked = !!s.langCheck;
+  $('#chipFr').classList.toggle('on', s.frOnly !== false);
 }
 $('#sSave').onclick = async () => {
-  const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100};
+  const b = {shipIn: $('#sShip').value, feeOut: $('#sFee').value === '' ? null : Number($('#sFee').value) / 100, langCheck: $('#sLang').checked};
   for (const [id, k] of [['#sKey', 'anthropicKey'], ['#sTg', 'tgToken'], ['#sChat', 'tgChat'], ['#sTcg', 'tcgKey']]) if ($(id).value.trim()) b[k] = $(id).value.trim();
   try{
     await api('/api/settings', 'POST', b);
