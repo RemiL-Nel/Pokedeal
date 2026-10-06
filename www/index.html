@@ -110,6 +110,7 @@ a.link{color:var(--acc2)}
     <span class="chip" id="chipSound">Son : off</span>
     <span class="chip" id="chipOnlyNew">Nouvelles</span>
     <span class="chip" id="chipDeals">Bonnes affaires</span>
+    <span class="chip" id="chipSort">Tri : score</span>
     <span class="chip" id="chipVariants">+ variantes</span>
   </div>
 </header>
@@ -117,7 +118,6 @@ a.link{color:var(--acc2)}
 <main>
   <!-- RÉCENT -->
   <section class="tab active" id="tab-recent">
-    <div id="keyWarn" class="warnbox" style="display:none">Pour les scores de bonne affaire, ajoute ta clé Anthropic dans Stock › Réglages. Sans elle, tu vois seulement la liste des annonces.</div>
     <div id="err" class="err" style="display:none"></div>
     <div id="grid" class="grid"></div>
     <div id="empty" class="empty" style="display:none">Aucune annonce pour l'instant.</div>
@@ -125,7 +125,7 @@ a.link{color:var(--acc2)}
 
   <!-- VENDRE -->
   <section class="tab" id="tab-sell">
-    <div class="warnbox" id="sellNote" style="display:none">Ajoute ta clé Anthropic dans Stock › Réglages pour identifier les cartes.</div>
+    <div class="warnbox" id="sellNote" style="display:none">L'identification par photo utilise l'IA d'Anthropic (payant). Sans clé, cet onglet ne peut pas analyser la photo (le reste de l'appli n'en a pas besoin).</div>
     <label class="drop" for="file">
       <b>Prendre la carte en photo</b>
       <span>L'IA identifie la carte, estime le prix et rédige l'annonce.</span>
@@ -191,7 +191,7 @@ a.link{color:var(--acc2)}
 
     <div class="panel">
       <h3>Réglages</h3>
-      <label for="sKey">Clé API Anthropic <span id="sKeyState"></span></label>
+      <label for="sKey">Clé API Anthropic (optionnelle, seulement pour identifier une carte par photo dans « Vendre ») <span id="sKeyState"></span></label>
       <input id="sKey" class="field" type="password" autocomplete="off" placeholder="sk-ant-…">
       <div class="two">
         <div style="flex:1"><label for="sShip">Port moyen à l'achat (€)</label><input id="sShip" class="field" type="number" inputmode="decimal" step="0.1"></div>
@@ -270,7 +270,7 @@ let toastT;
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => t.style.display = 'none', 2200); }
 
 let app = {watch: {}, watchStatus: {}, budget: {}, inventory: [], stats: null, config: {}, settings: {}};
-let live = true, sound = false, onlyNew = false, onlyDeals = false;
+let live = true, sound = false, onlyNew = false, onlyDeals = false, sortScore = false;
 let seen = new Set(), newIds = new Set(), firstLoad = true, items = [], timer = null, lastDataUrl = null, curTab = 'recent';
 
 /* ---------- Onglets ---------- */
@@ -292,7 +292,6 @@ async function loadState(){
   try{
     app = await api('/api/state');
     renderBudget(); renderStock(); renderWatch(); renderSettings();
-    $('#keyWarn').style.display = app.config.canScore ? 'none' : 'block';
     $('#sellNote').style.display = app.config.canIdentify ? 'none' : 'block';
     render();
   }catch(e){ /* l'onglet Récent affichera l'erreur */ }
@@ -336,10 +335,14 @@ function itemEl(it){
   meta.appendChild(price);
   meta.appendChild(tag('div', 'ttl', it.title));
   if (d && d.level !== 'none') {
-    meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
-    meta.appendChild(tag('div', 'sm', (it.analysis ? (it.analysis.name + ' ' + it.analysis.number).trim() + ' · ' : '') + 'estimation, vérifie la carte'));
+    meta.appendChild(tag('div', 'deal ' + d.level, (d.level === 'top' ? '🔥 ' : '👍 ') + 'Score ' + d.score + '/100 · marge ' + sgn(d.margin) + ' · Cardmarket ~' + fmt(d.market)));
+    meta.appendChild(tag('div', 'sm', (d.matched ? d.matched + ' · ' : '') + (d.ambiguous ? 'plusieurs cartes possibles, ' : '') + 'estimation, vérifie la carte (langue, état)'));
   } else if (d) {
-    meta.appendChild(tag('div', 'sm', 'Marché ~' + fmt(d.market) + ' · marge ' + sgn(d.margin)));
+    meta.appendChild(tag('div', 'sm', 'Score ' + d.score + '/100 · Cardmarket ~' + fmt(d.market) + ' · marge ' + sgn(d.margin)));
+  } else if (it.lot) {
+    meta.appendChild(tag('div', 'sm', 'Lot de ' + it.lot.count + ' cartes · ' + fmt(it.lot.perCard) + ' / carte'));
+  } else if (it.graded) {
+    meta.appendChild(tag('div', 'sm', 'Carte gradée : prix à vérifier à la main'));
   } else {
     meta.appendChild(tag('div', 'sm', [it.status, it.seller].filter(Boolean).join(' · ')));
   }
@@ -361,7 +364,8 @@ function itemEl(it){
 function render(){
   let list = items;
   if (onlyNew) list = list.filter(i => newIds.has(i.id));
-  if (onlyDeals) list = list.filter(i => i.deal && i.deal.level !== 'none').sort((a, b) => b.deal.margin - a.deal.margin);
+  if (onlyDeals) list = list.filter(i => i.deal && i.deal.level !== 'none');
+  if (onlyDeals || sortScore) list = [...list].sort((a, b) => (b.deal ? b.deal.score : -1) - (a.deal ? a.deal.score : -1) || (b.deal ? b.deal.margin : 0) - (a.deal ? a.deal.margin : 0));
   $('#grid').replaceChildren(...list.map(itemEl));
   $('#empty').style.display = list.length ? 'none' : 'block';
 }
@@ -389,7 +393,7 @@ async function load(){
     render();
     if (fresh) { if (sound) beep(); if (navigator.vibrate) navigator.vibrate(120); }
     const deals = items.filter(i => i.deal && i.deal.level !== 'none').length;
-    $('#sub').textContent = `${items.length} annonces` + (j.scoring ? ` · ${deals} bonne(s) affaire(s)` : '') + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}` + (j.aiError ? ' · scoring indisponible' : '');
+    $('#sub').textContent = `${items.length} annonces` + ` · ${deals} bonne(s) affaire(s)` + ` · ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`;
   }catch(e){
     $('#dot').classList.remove('live'); $('#err').style.display = 'block'; $('#err').textContent = 'Erreur : ' + e.message;
   }finally{ loading = false; }
@@ -403,6 +407,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && cu
 $('#chipLive').onclick = e => { live = !live; e.target.classList.toggle('on', live); schedule(); };
 $('#chipSound').onclick = e => { sound = !sound; e.target.classList.toggle('on', sound); e.target.textContent = 'Son : ' + (sound ? 'on' : 'off'); if (sound) beep(); };
 $('#chipOnlyNew').onclick = e => { onlyNew = !onlyNew; e.target.classList.toggle('on', onlyNew); render(); };
+$('#chipSort').onclick = e => { sortScore = !sortScore; e.target.classList.toggle('on', sortScore); render(); };
 $('#chipDeals').onclick = e => { onlyDeals = !onlyDeals; e.target.classList.toggle('on', onlyDeals); render(); };
 $('#chipVariants').onclick = () => { $('#q').value = VARIANTS; refilter(); };
 let deb; function refilter(){ clearTimeout(deb); deb = setTimeout(() => { firstLoad = true; seen.clear(); newIds.clear(); load(); schedule(); }, 600); }
@@ -492,7 +497,7 @@ $('#wTest').onclick = async () => {
 /* ---------- Réglages ---------- */
 function renderSettings(){
   const s = app.settings || {};
-  $('#sKeyState').textContent = s.hasAnthropicKey ? '(enregistrée ✓)' : '(manquante)';
+  $('#sKeyState').textContent = s.hasAnthropicKey ? '(enregistrée ✓)' : '(aucune : pas de coût)';
   $('#sTgState').textContent = s.hasTelegram ? '(configuré ✓)' : '';
   $('#sTcgState').textContent = s.hasTcgKey ? '(enregistrée ✓)' : '';
   $('#sShip').value = s.shipIn ?? 3;

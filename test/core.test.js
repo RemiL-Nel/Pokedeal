@@ -6,7 +6,7 @@ const { createCore, makeRequest, parseSetCookie } = require('../www/js/core.js')
 /* ---------- Faux services ---------- */
 const nowSec = () => Math.floor(Date.now() / 1000);
 const vintedItems = [
-  { id: 1, title: 'Dracaufeu 4/102 set de base', price: { amount: '20.0' }, total_item_price: { amount: '21.4' }, status: 'Bon état', photo: { url: 'http://x/1.jpg', high_resolution: { timestamp: String(nowSec() - 60) } }, user: { login: 'marie' }, url: 'https://www.vinted.fr/items/1' },
+  { id: 1, title: 'Dracaufeu 4/102 set de base', price: { amount: '20.0' }, total_item_price: { amount: '21.4' }, status: 'Bon état', photo: { url: 'http://x/1.jpg', high_resolution: { timestamp: String(nowSec() - 60) } }, user: { login: 'marie' }, url: '/items/1-dracaufeu' },
   { id: 2, title: 'Lot 200 cartes pokemon', price: { amount: '8.0' }, photo: { url: 'http://x/2.jpg', high_resolution: { timestamp: String(nowSec() - 120) } }, user: { login: 'paul' } },
   { id: 3, title: 'Pikachu 58/102', price: '2.0', total_item_price: { amount: '2.5' }, photo: { url: 'http://x/3.jpg', high_resolution: { timestamp: String(nowSec() - 300) } }, user: { login: 'lea' } },
 ];
@@ -22,14 +22,18 @@ function listen(handler) {
 const readBody = (req) => new Promise((r) => { let d = ''; req.on('data', (c) => (d += c)).on('end', () => r(d)); });
 const json = (res, code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
 
+const vintedUrls = [];
 const vintedHandler = (req, res) => {
-  if (req.url.startsWith('/api/v2/catalog/items')) {
-    const c = req.headers.cookie || '';
-    if (!c.includes('_vinted_fr_session=abc123') || !c.includes('anon_id=xyz')) { res.writeHead(401); return res.end('{}'); }
+  vintedUrls.push(req.url);
+  if (req.url.startsWith('/boom/')) { res.writeHead(404); return res.end('{"code":"VNT-404"}'); }
+  if (req.url.startsWith('/api/v2/catalog/items')) { res.writeHead(404); return res.end('{}'); } // ancien endpoint : mort depuis sept. 2026
+  if (req.url.startsWith('/svc-catalogue/items')) {
+    if (req.headers.authorization !== 'Bearer tok123' || req.headers['x-anon-id'] !== 'xyz') { res.writeHead(401); return res.end('{}'); }
+    if (/[?&](price_to|price_from)=(&|$)/.test(req.url)) { res.writeHead(400); return res.end('{"code":"INVALID_REQUEST"}'); } // filtres vides refusés
     return json(res, 200, { items: vintedItems });
   }
-  // cookie avec une virgule dans « Expires » : piège classique du découpage de set-cookie
-  res.setHeader('set-cookie', ['_vinted_fr_session=abc123; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly', 'anon_id=xyz; Path=/']);
+  // cookies avec une virgule dans « Expires » : piège classique du découpage de set-cookie
+  res.setHeader('set-cookie', ['access_token_web=tok123; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly', 'anon_id=xyz; Path=/']);
   res.writeHead(200); res.end('ok');
 };
 const claudeHandler = async (req, res) => {
@@ -37,21 +41,18 @@ const claudeHandler = async (req, res) => {
   const b = JSON.parse(await readBody(req));
   claudeCalls.push(b);
   const txt = JSON.stringify(b.messages);
-  if (txt.includes('Voici des titres')) {
-    const out = [];
-    if (txt.includes('Dracaufeu 4/102 set de base')) out.push({ id: 1, single: true, name: 'Charizard', number: '4/102', set: 'Base Set' });
-    if (txt.includes('Lot 200')) out.push({ id: 2, single: false });
-    if (txt.includes('Pikachu 58/102')) out.push({ id: 3, single: true, name: 'Pikachu', number: '58/102', set: 'Base Set' });
-    if (txt.includes('Dracaufeu 4/102 neuf')) out.push({ id: 99, single: true, name: 'Charizard', number: '4/102', set: 'Base Set' });
-    return json(res, 200, { content: [{ type: 'text', text: 'Voici : ' + JSON.stringify(out) }] });
-  }
   assert.ok(txt.includes('"type":"image"'), "l'identification doit envoyer une image");
   return json(res, 200, { content: [{ type: 'text', text: '{"name":"Charizard","name_fr":"Dracaufeu","set":"Base Set","number":"4/102","language":"FR","rarity":"Rare Holo","condition":"Bon état","condition_notes":"léger blanchiment"}' }] });
 };
+const tcgQueries = [];
+const card = (name, number, set, total, prices) => ({ name, number, set: { name: set, printedTotal: total }, images: { small: 'x' }, cardmarket: { url: 'https://cm/x', prices } });
 const tcgHandler = (req, res) => {
   const q = decodeURIComponent(req.url);
-  const big = q.includes('Charizard');
-  json(res, 200, { data: [{ name: big ? 'Charizard' : 'Pikachu', number: big ? '4' : '58', set: { name: 'Base Set', printedTotal: 102 }, images: { small: 'x' }, cardmarket: { url: 'https://cm/x', prices: big ? { trendPrice: 80, avg30: 78, lowPrice: 60 } : { trendPrice: 3, avg30: 3, lowPrice: 1 } } }] });
+  tcgQueries.push(q);
+  if (q.includes('number:"4" set.printedTotal:102')) return json(res, 200, { data: [card('Charizard', '4', 'Base Set', 102, { trendPrice: 80, avg30: 78, lowPrice: 60, reverseHoloTrend: 0 })] });
+  if (q.includes('number:"58" set.printedTotal:102')) return json(res, 200, { data: [card('Pikachu', '58', 'Base Set', 102, { trendPrice: 3, avg30: 3, lowPrice: 1 })] });
+  if (q.includes('number:"7" set.printedTotal:99')) return json(res, 200, { data: [card('Machin', '7', 'Set A', 99, { trendPrice: 80 }), card('Truc', '7', 'Set B', 99, { trendPrice: 30 })] });
+  json(res, 200, { data: [] });
 };
 const telegramHandler = async (req, res) => { telegramSent.push(JSON.parse(await readBody(req)).text); json(res, 200, { ok: true }); };
 
@@ -101,44 +102,82 @@ const test = (name, fn) => tests.push({ name, fn });
     assert.equal(parseSetCookie(undefined), '');
   });
 
-  test('Récent sans clé : liste seule, pas de score', async () => {
+  test("Vinted : nouvel endpoint svc-catalogue, jeton anonyme, URL relative rendue absolue, filtres vides omis", async () => {
+    vintedUrls.length = 0;
     const core = mk();
-    const j = await core.api('/api/recent?q=carte+pokemon');
-    assert.equal(j.scoring, false);
+    const j = await core.api('/api/recent?q=carte+pokemon&min=&max=');
     assert.equal(j.items.length, 3);
-    assert.equal(j.items[0].deal, null);
+    assert.ok(vintedUrls.some((u) => u.startsWith('/svc-catalogue/items')));
+    assert.ok(!vintedUrls.some((u) => u.startsWith('/api/v2/catalog')), "l'ancien endpoint ne doit plus être appelé");
+    assert.match(j.items[0].url, /^https?:\/\/.+\/items\/1-dracaufeu$/);
     assert.equal(j.items[2].price, 2); // prix en chaîne ou en objet
   });
 
-  test('Récent avec clé : score de bonne affaire, lot ignoré', async () => {
+  test('parseTitle : numéro/total, lots, gradées, étrangères, ambiguës', () => {
+    const { parseTitle } = createCore({ request: makeRequest(globalThis), storage: memStorage() });
+    assert.deepEqual([parseTitle('Dracaufeu 004/102 holo').single, parseTitle('Dracaufeu 004/102 holo').number, parseTitle('Dracaufeu 004/102 holo').total], [true, '4', 102]);
+    assert.equal(parseTitle('Carte Pokémon Mew 151/165 reverse').reverse, true);
+    assert.equal(parseTitle('Lot 200 cartes pokemon').lotCount, 200);
+    assert.equal(parseTitle('Lot de 3 cartes 4/102 5/102 6/102').single, false);
+    assert.equal(parseTitle('Dracaufeu 4/102 PSA 9').single, false);
+    assert.equal(parseTitle('Dracaufeu 4/102 PSA 9').graded, true);
+    assert.equal(parseTitle('Pikachu 25/165 japonais').single, false);
+    assert.equal(parseTitle('Booster pokemon 151').single, false);
+    assert.equal(parseTitle('rdv le 12/10 pour carte').single, false);
+    assert.equal(parseTitle('Pikachu holo rare').single, false);
+  });
+
+  test('Récent : score par formule, sans clé Anthropic, lot et inconnues sans score', async () => {
+    const claudeBefore = claudeCalls.length;
     const core = mk();
-    await core.api('/api/settings', 'POST', { anthropicKey: 'sk-test' });
     const j = await core.api('/api/recent?q=carte+pokemon|pokemone');
     assert.equal(j.scoring, true);
     const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
+    // 80 × 0,9 × 0,95 = 68,4 ; coût = 21,4 + 3 = 24,4 ; marge 44 ; ROI 180 % → score 90
+    assert.equal(byId[1].deal.margin, 44);
+    assert.equal(byId[1].deal.score, 90);
     assert.equal(byId[1].deal.level, 'top');
-    assert.equal(byId[1].deal.margin, 51.6); // 80*0.95 - (21.4+3)
     assert.equal(byId[1].analysis.name, 'Charizard');
     assert.equal(byId[2].deal, null);
-    assert.equal(byId[3].deal.level, 'none');
+    assert.deepEqual(byId[2].lot, { count: 200, perCard: 0.04 });
+    assert.equal(byId[3].deal.level, 'none'); // Pikachu à 3 € : marge négative
+    assert.equal(byId[3].deal.score, 0);
+    assert.equal(claudeCalls.length, claudeBefore, "aucun appel à l'API Claude pour scorer");
   });
 
-  test('Chemin natif Android : cookie en chaîne jointe, corps JSON en objet', async () => {
+  test('Formule : borne à 100, carte ambiguë plafonnée à « bien », cache des prix', async () => {
+    const saved = vintedItems.slice();
+    vintedItems.length = 0;
+    vintedItems.push({ id: 7, title: 'Carte 7/99', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'a' } });
+    vintedItems.push({ id: 8, title: 'Carte 7/99 reverse', price: { amount: '1.0' }, photo: { url: 'x' }, user: { login: 'b' } });
+    vintedItems.push({ id: 9, title: 'Carte 58/102 neuve', price: { amount: '0.5' }, photo: { url: 'x' }, user: { login: 'c' } });
+    tcgQueries.length = 0;
+    const core = mk();
+    const j = await core.api('/api/recent?q=x');
+    vintedItems.length = 0;
+    vintedItems.push(...saved);
+    const byId = Object.fromEntries(j.items.map((i) => [i.id, i]));
+    assert.equal(byId[7].deal.ambiguous, true);
+    assert.equal(byId[7].deal.market, 30); // la moins chère des deux cartes possibles
+    assert.equal(byId[7].deal.score, 100);
+    assert.equal(byId[7].deal.level, 'good', 'ambiguë : jamais « top »');
+    assert.equal(tcgQueries.filter((q) => q.includes('"7"')).length >= 1, true);
+    assert.ok(tcgQueries.filter((q) => q.includes('number:"7" set.printedTotal:99')).length <= 2, 'une seule requête par numéro (cache), reverse = autre clé');
+  });
+
+  test('Chemin natif Android : cookies en chaîne jointe, jeton lu depuis set-cookie', async () => {
     const log = [];
     const core = mk({}, fakeNative(log));
-    await core.api('/api/settings', 'POST', { anthropicKey: 'sk-test' });
     const j = await core.api('/api/recent?q=carte+pokemon');
     assert.equal(j.items.length, 3);
     assert.equal(j.items.find((i) => i.id === 1).deal.level, 'top');
-    assert.ok(log.some((u) => u.includes('/v1/messages')));
+    assert.ok(log.some((u) => u.includes('/svc-catalogue/items')));
+    assert.ok(!log.some((u) => u.includes('/v1/messages')));
   });
 
-  test('Mauvaise clé Anthropic : la liste reste affichée, scoring signalé indisponible', async () => {
-    const core = mk();
-    await core.api('/api/settings', 'POST', { anthropicKey: 'mauvaise' });
-    const j = await core.api('/api/recent?q=carte+pokemon');
-    assert.equal(j.items.length, 3);
-    assert.ok(j.aiError && /401/.test(j.aiError));
+  test('Vinted en erreur : message lisible avec le code et un extrait', async () => {
+    const core = mk({ vintedApiBase: vinted.url + '/boom' });
+    await assert.rejects(core.api('/api/recent?q=carte+pokemon'), /Vinted a répondu 404 : .*VNT-404/);
   });
 
   test('État : les secrets ne sont jamais renvoyés', async () => {
@@ -151,7 +190,8 @@ const test = (name, fn) => tests.push({ name, fn });
     await core.api('/api/settings', 'POST', { clear: ['anthropicKey', 'tgToken', 'tgChat'] });
     const s2 = await core.api('/api/state');
     assert.equal(s2.settings.hasAnthropicKey, false);
-    assert.equal(s2.config.canScore, false);
+    assert.equal(s2.config.canIdentify, false);
+    assert.equal(s2.config.canScore, true, 'le score ne dépend plus de la clé');
   });
 
   test('Stock, budget, bénéfices et validations', async () => {
@@ -208,7 +248,7 @@ const test = (name, fn) => tests.push({ name, fn });
     const notes = [];
     telegramSent.length = 0;
     const core = mk({ notify: async (n) => notes.push(n), ensureNotifyPermission: async () => true });
-    await core.api('/api/settings', 'POST', { anthropicKey: 'sk-test', tgToken: 'tok', tgChat: '42' });
+    await core.api('/api/settings', 'POST', { tgToken: 'tok', tgChat: '42' });
     await core.api('/api/watch', 'POST', { enabled: true, queries: ['carte pokemon'], onlyDeals: true, intervalSec: 1 });
     await sleep(1500);
     assert.equal(notes.length, 0, 'premier passage : rien envoyé');
@@ -217,7 +257,7 @@ const test = (name, fn) => tests.push({ name, fn });
     await sleep(2800);
     await core.api('/api/watch', 'POST', { enabled: false });
     assert.equal(notes.length, 1, 'seule la bonne affaire déclenche une alerte');
-    assert.match(notes[0].title, /🔥 Marge \+\d/);
+    assert.match(notes[0].title, /🔥 Score \d+\/100 · marge \+\d/);
     assert.equal(telegramSent.length, 1);
     assert.match(telegramSent[0], /Dracaufeu 4\/102 neuf/);
     const st = (await core.api('/api/state')).watchStatus;

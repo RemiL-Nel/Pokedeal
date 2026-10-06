@@ -2,7 +2,7 @@
 
 Appli native (Capacitor) qui fait tout **dans le téléphone** : plus de serveur, plus rien à mettre sur Internet. Les requêtes vers Vinted partent directement de ton Pixel (IP mobile, pas d'IP de datacenter).
 
-- **Récent** : annonces Vinted récentes, avec score de bonne affaire (marge estimée vs Cardmarket), bouton **Acheter ↗** (ouvre l'annonce dans l'appli Vinted) et **J'ai acheté** (journal + budget).
+- **Récent** : annonces Vinted récentes, avec score de bonne affaire /100 (marge estimée vs Cardmarket, calculée par formule, sans IA), bouton **Acheter ↗** (ouvre l'annonce dans l'appli Vinted) et **J'ai acheté** (journal + budget).
 - **Vendre** : photo d'une carte, identification, prix Cardmarket, annonce prête, partage de la photo vers Vinted.
 - **Stock** : achats, ventes, bénéfices, budget mensuel, alertes, réglages, sauvegarde.
 
@@ -35,16 +35,19 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ## Premier lancement
 
-1. Onglet **Stock › Réglages** : colle ta clé API Anthropic (console.anthropic.com), enregistre. Sans elle, tu vois la liste mais pas les scores ni l'identification. Pense à fixer une limite de dépense dans ta console Anthropic.
+1. Rien à configurer pour la liste et les scores : aucune clé nécessaire, aucun coût.
 2. Autorise les notifications quand Android le demande (pour les alertes).
-3. Optionnel : Telegram (token + chat id) et clé pokemontcg.io.
+3. Optionnel : clé pokemontcg.io (plus de requêtes de prix), Telegram (token + chat id), et clé API Anthropic **uniquement** pour l'identification par photo dans « Vendre » (payant, fixe une limite de dépense dans la console).
 
 ## Ce qu'il faut savoir
 
 - **Alertes en arrière-plan** : la surveillance tourne tant que l'appli est ouverte ou vient d'être mise de côté. Android suspend ensuite les applis inactives, donc ne compte pas dessus toute la nuit. Une surveillance fiable 24 h/24 demande un service dédié (ou le serveur de la v2 sur un PC allumé) ; je peux l'étudier.
 - **Non testé sur un vrai téléphone** : la logique est testée (tests automatiques, interface simulée, réponses au format Capacitor lues dans son code source), mais pas l'APK lui-même. Les points à surveiller au premier lancement : la liste Vinted se remplit, la caméra s'ouvre, une notification test arrive (Stock › Alertes › Notification test), le partage de la photo vers Vinted.
 - **Vinted** : pas d'API publique, le scraping est contraire à leurs CGU et peut être bloqué ou casser. Le paiement reste chez Vinted : « Acheter ↗ » ouvre l'annonce, tu valides toi-même.
-- **Score de bonne affaire** : estimation faite par l'IA à partir du titre. Elle peut se tromper de carte ou d'extension, le prix de référence est celui de la version anglaise sur Cardmarket, et l'état réel compte. Regarde les photos avant d'acheter.
+- **Score de bonne affaire** : calculé par formule, sans IA. L'appli lit le numéro de carte dans le titre (ex. `025/165`), cherche le prix Cardmarket correspondant (pokemontcg.io) puis calcule :
+  `coût = prix payé (frais Vinted inclus) + port d'achat` · `revente = prix Cardmarket × 0,9 (décote prudente) × (1 − commission)` · `marge = revente − coût` · `score = marge / coût × 50`, borné à 0-100 (🔥 : score ≥ 50 et marge ≥ 5 € ; 👍 : score ≥ 25 et marge ≥ 2 €).
+  Limites : il faut un numéro `n/total` dans le titre (sinon pas de score) ; lots, cartes gradées et japonaises ne sont pas scorés ; si plusieurs cartes ont le même numéro/total, on prend la moins chère (« plusieurs cartes possibles ») ; le prix est celui de la version anglaise et l'état réel compte. Regarde toujours les photos avant d'acheter.
+- **API Vinted** : depuis septembre 2026, Vinted a remplacé `/api/v2/catalog/items` par `api.vinted.fr/svc-catalogue/items` avec un jeton anonyme. L'appli utilise le nouvel endpoint ; s'il change encore, la liste affichera l'erreur reçue.
 - **Sauvegarde** : stock et budget sont stockés sur le téléphone. Utilise Stock › Réglages › Exporter avant de désinstaller. Les clés API ne sont pas incluses dans l'export. La sauvegarde cloud Android est désactivée pour que les clés ne partent pas chez Google.
 - L'icône est celle par défaut de Capacitor.
 
@@ -52,7 +55,7 @@ Puis sur GitHub : Settings › Secrets and variables › Actions › New reposit
 
 ```bash
 npm ci
-npm test        # 14 tests de la logique embarquée (www/js/core.js)
+npm test        # 16 tests de la logique embarquée (www/js/core.js)
 ```
 
 Le projet Android n'est pas dans le dépôt : il est généré à chaque build par `npx cap add android`, puis ajusté par `scripts/patch-android.js` (permission caméra, pas de sauvegarde cloud).
