@@ -1,0 +1,12 @@
+{
+  "tgToken": "TOKEN_DU_BOT_TELEGRAM",
+  "tgChat": "TON_CHAT_ID",
+  "queries": ["carte pokemon"],
+  "maxPrice": null,
+  "onlyDeals": true,
+  "intervalSec": 60,
+  "frMode": "loose",
+  "shipIn": 3,
+  "feeOut": 0.05,
+  "haircut": 10
+}

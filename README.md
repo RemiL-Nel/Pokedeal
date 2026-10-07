@@ -65,3 +65,15 @@ npm test        # 31 tests de la logique embarquée (www/js/core.js)
 ```
 
 Le projet Android n'est pas dans le dépôt : il est généré à chaque build par `npx cap add android`, puis ajusté par `scripts/patch-android.js` (permission caméra, pas de sauvegarde cloud).
+
+
+## Surveillance 24 h/24 sur un PC / Raspberry (alertes Telegram)
+
+Android finit par geler la surveillance dans l'appli. Pour du fiable, la même logique tourne sur une machine allumée en permanence :
+
+1. Installe Node 22+ (`node -v`), clone le dépôt, `npm ci`.
+2. Crée un bot Telegram avec @BotFather (récupère le token) et trouve ton chat id (écris à ton bot puis ouvre `https://api.telegram.org/bot<TOKEN>/getUpdates`).
+3. `node server/watch.js` crée `server/config.json` ; remplis `tgToken` et `tgChat`, relance : tu reçois un message test, puis une alerte Telegram par bonne affaire.
+4. Pour qu'il survive aux redémarrages : `pm2 start server/watch.js --name pokedeals && pm2 save && pm2 startup`.
+
+Limites : pas d'OCR côté serveur, donc la langue se déduit du titre (mode `loose` par défaut) ; il faut une connexion résidentielle (Vinted bloque souvent les IP de datacentres).
